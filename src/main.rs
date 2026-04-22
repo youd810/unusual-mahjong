@@ -1,4 +1,4 @@
-// yaku to do
+// yaku todo
 //
 // Yakuman (Limit Hands)
 // 
@@ -84,7 +84,14 @@ enum Mentsu {
     Jantou(Vec<Tile>),
     Koutsu(Vec<Tile>, bool), // true = closed
     Shuntsu(Vec<Tile>, bool),
-    Kantsu(Vec<Tile>, bool),
+    Kantsu(Kantsu),
+}
+
+#[derive(PartialEq, Eq, Clone)]
+enum Kantsu {
+    Ankan(Vec<Tile>),
+    Daiminkan(Vec<Tile>),
+    Shouminkan(Vec<Tile>),
 }
 
 enum Winds {
@@ -113,24 +120,121 @@ struct Game {
     bullet: u8,
 }
 
+#[derive(PartialEq, Eq)]
+enum ChiTilePos { // tile drawn/discarded
+    Left,  
+    Middle, 
+    Right,  
+}
+
 impl Player {
-    fn declare_ankan(&mut self, tile: &Tile) { 
-        if self.hand.iter().filter(|x| **x == *tile).count() == 4 {    
-            self.open_mentsu.push(Mentsu::Kantsu(vec![tile.clone(); 4], true));
-            self.hand.retain(|x| x != tile);
+    fn remove_tile_from_hand(&mut self, target: &Tile) {
+        if let Some(idx) = self.hand.iter().position(|x| x == target) {
+            self.hand.remove(idx);
         }
     }
-    fn declare_shouminkan(&mut self, tile: &Tile) {
+
+    fn can_declare_pon(&mut self, tile: &Tile,) -> bool {
+        self.hand.iter().filter(|x| **x == *tile).count() >= 2
+    }
+
+    fn declare_pon(&mut self, tile: &Tile,) {
+        if self.can_declare_pon(tile) {
+            self.open_mentsu.push(Mentsu::Koutsu(vec![tile.clone(); 3], false));
+            for _ in 0..2 {
+                let idx = self.hand.iter().position(|x| x == tile).unwrap();
+                self.hand.remove(idx);
+            }
+        }
+    }
+
+    fn can_declare_chi(&mut self, tile: &Tile) -> Vec<ChiTilePos> {
+        let mut results = vec![];
+
+        // safe 'unwrap' with if let
+        if let (Some(prev), Some(next)) = (previous_tile_sequence(tile), next_tile_sequence(tile)) {
+            if self.hand.contains(&prev) && self.hand.contains(&next) {
+                results.push(ChiTilePos::Middle);
+            }
+        }
+
+        if let Some(next) = next_tile_sequence(tile) {
+            if let Some(next_next) = next_tile_sequence(&next) {
+                if self.hand.contains(&next) && self.hand.contains(&next_next) {
+                    results.push(ChiTilePos::Left);
+                }
+            }
+        }
+
+        if let Some(prev) = previous_tile_sequence(tile) {
+            if let Some(prev_prev) = previous_tile_sequence(&prev) {
+                if self.hand.contains(&prev) && self.hand.contains(&prev_prev) {
+                    results.push(ChiTilePos::Right);
+                }
+            }
+        }
+
+        results
+    }
+
+    fn declare_chi(&mut self, tile: &Tile, pos: ChiTilePos){
+        let positions = self.can_declare_chi(tile);
+        if !positions.is_empty(){
+            let pos: ChiTilePos = choose_chi_pos_or_something(positions);// let the player choose 
+            
+            match pos {
+                ChiTilePos::Middle => {
+                    let next = next_tile_sequence(tile).unwrap();
+                    let prev = previous_tile_sequence(tile).unwrap();
+                    // use the variables as a pointer for removal first b4 moving the value 
+                    self.remove_tile_from_hand(&next);
+                    self.remove_tile_from_hand(&prev);
+                    self.open_mentsu.push(Mentsu::Shuntsu(vec![prev, tile.clone(), next], false));
+                    
+                },
+                ChiTilePos::Left => {
+                    let next = next_tile_sequence(tile).unwrap();
+                    let next_next = next_tile_sequence(&next).unwrap();
+                    self.remove_tile_from_hand(&next);
+                    self.remove_tile_from_hand(&next_next);
+                    self.open_mentsu.push(Mentsu::Shuntsu(vec![tile.clone(), next, next_next], false));
+                    
+                },
+                ChiTilePos::Right => {
+                    let prev = previous_tile_sequence(tile).unwrap();
+                    let prev_prev = previous_tile_sequence(&prev).unwrap();
+                    self.remove_tile_from_hand(&prev);
+                    self.remove_tile_from_hand(&prev_prev);
+                    self.open_mentsu.push(Mentsu::Shuntsu(vec![prev_prev, prev, tile.clone()], false));
+                },
+            }
+        }
+    }
+
+    fn declare_kan_from_hand(&mut self, tile: &Tile, is_discard: bool) { 
+        let count = self.hand.iter().filter(|x| **x == *tile).count();
+        if is_discard && count == 3 {
+            self.open_mentsu.push(Mentsu::Kantsu(Kantsu::Daiminkan(vec![tile.clone(); 4])));
+            self.hand.retain(|x| x != tile);
+        } 
+        else if !is_discard && count == 4 {
+            self.open_mentsu.push(Mentsu::Kantsu(Kantsu::Ankan(vec![tile.clone(); 4])));
+            self.hand.retain(|x| x != tile);
+        }  
+    }
+
+    fn declare_kan_from_meld(&mut self, tile: &Tile) {
         for mentsu in &mut self.open_mentsu {
             if let Mentsu::Koutsu(tiles, false) = mentsu {
                 if tiles[0] == *tile {
-                    *mentsu = Mentsu::Kantsu(vec![tile.clone(); 4], false);
+                    // deref to mutate
+                    *mentsu = Mentsu::Kantsu(Kantsu::Shouminkan(vec![tile.clone(); 4]));
                     self.hand.retain(|x| x != tile);
                     break;
                 }
             }
         }
-    }
+    } 
 }
 
 fn is_terminal(tile: &Tile) -> bool {
@@ -316,6 +420,15 @@ fn next_tile_sequence(tile: &Tile) -> Option<Tile> {
         Tile::Man(n) if *n < 9 => Some(Tile::Man(n + 1)),
         Tile::Pin(n) if *n < 9 => Some(Tile::Pin(n + 1)),
         Tile::Sou(n) if *n < 9 => Some(Tile::Sou(n + 1)),
+        _ => None, 
+    }
+}
+
+fn previous_tile_sequence(tile: &Tile) -> Option<Tile> {
+    match tile {
+        Tile::Man(n) if *n > 1 => Some(Tile::Man(n - 1)),
+        Tile::Pin(n) if *n > 1 => Some(Tile::Pin(n - 1)),
+        Tile::Sou(n) if *n > 1 => Some(Tile::Sou(n - 1)),
         _ => None, 
     }
 }
