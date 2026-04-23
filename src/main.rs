@@ -1,49 +1,49 @@
 // yaku todo
-//
+// ?note to self: kan check = open mentsu, unusual yaku check = hand, normal yaku check = decompose result  
 // Yakuman (Limit Hands)
 // 
-// Kokushi Musou (Thirteen Orphans) done
-// Suuankou (Four Concealed Triplets) done
-// Daisangen (Big Three Dragons) done
+// !Kokushi Musou (Thirteen Orphans) done
+// !Suuankou (Four Concealed Triplets) done
+// !Daisangen (Big Three Dragons) done
 // Shousuushii (Little Four Winds)
 // Daisuushii (Big Four Winds)
-// Tsuuiisou (All Honors) done
+// !Tsuuiisou (All Honors) done
 // Chinroutou (All Terminals)
 // Ryuuiisou (All Green)
 // Chuuren Poutou (Nine Gates)
-// Suukantsu (Four Kans)
+// !Suukantsu (Four Kans) done
 // Tenhou (Heavenly Win — dealer wins on first draw)
 // Chiihou (Earthly Win — non-dealer wins on first draw)
 // 
 // 6 Han
 // 
-// Chinitsu (Full Flush)
+// !Chinitsu (Full Flush) done
 // 
 // 3 Han
 // 
-// Honitsu (Half Flush)
+// !Honitsu (Half Flush) done
 // Ryanpeikou (Two Sets of Identical Sequences)
-// Junchan (All sets contain terminals)
+// !Junchan (All sets contain terminals) done
 // 
 // 2 Han
 // 
-// Chanta (All sets contain terminals or honors)
+// !Chanta (All sets contain terminals or honors) done
 // Sanshoku Doujun (Three Color Straight) 
 // Sanshoku Doukou (Three Color Triplets)
 // Ittsu (Straight 1-9)
-// Toitoi (All Triplets)
-// Sanankou (Three Concealed Triplets) done
-// Shousangen (Little Three Dragons) done
+// !Toitoi (All Triplets) done
+// !Sanankou (Three Concealed Triplets) done
+// !Shousangen (Little Three Dragons) done
 // Honroutou (All Terminals and Honors)
-// Chiitoitsu (Seven Pairs) done
-// Sankantsu (Three Kans)
+// !Chiitoitsu (Seven Pairs) done
+// !Sankantsu (Three Kans) done
 // Double Riichi
 // 
 // 1 Han
 // 
 // Tanyao (All Simples) needs closed hand check
 // Iipeikou (One Set of Identical Sequences) done
-// Yakuhai / Fanpai (Value Tiles — seat wind, round wind, dragons) done
+// !Yakuhai / Fanpai (Value Tiles — seat wind, round wind, dragons) done
 // Riichi
 // Ippatsu
 // Menzen Tsumo (Self-draw win with closed hand)
@@ -55,12 +55,12 @@
 // 
 // Special
 // 
-// Tenpai/Machi done
+// !Tenpai/Machi done
 // Dora counting (not a yaku but affects scoring)
 // Fu calculation
 // Han → Score conversion table
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 enum Tile {
     Man(u8),
     Pin(u8),
@@ -68,7 +68,7 @@ enum Tile {
     Honor(Honor),
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 enum Honor {
     White,
     Red,
@@ -118,6 +118,8 @@ struct Player {
 
 struct Game {
     rounds: u8,
+    turns: u8,
+    wall: Vec<Tile>,
     bakaze: Winds,
     bullet: u8,
 }
@@ -286,6 +288,22 @@ fn check_win(hand: &Vec<Tile>, player: &Player) -> Option<Vec<Vec<Mentsu>>> {
     }
 }
 
+fn combine_tiles(player: &Player) -> Vec<Tile> {
+    let mut result = player.hand.clone();
+    for mentsu in &player.open_mentsu {
+        if let 
+            Mentsu::Koutsu(tiles, _) |
+            Mentsu::Shuntsu(tiles, _) |
+            Mentsu::Ankan(tiles) |
+            Mentsu::Daiminkan(tiles) |
+            Mentsu::Shouminkan(tiles) = mentsu {
+                result.extend(tiles)
+            }
+    };
+    result
+}
+
+
 
 fn tanyao(hand: &Vec<Tile>) -> bool {
     // add is_closed cond
@@ -369,21 +387,38 @@ fn yakuhai(player: &Player, results: &Vec<Vec<Mentsu>>, bakaze: &Winds) -> u8 {
 
 fn sanankou(results: &Vec<Vec<Mentsu>>) -> bool {
     results.iter().any(|result| {
-        result.iter().filter(|mentsu| matches!(mentsu, Mentsu::Koutsu(_, true)) || matches!(mentsu, Mentsu::Ankan(_))).count() == 3
+        result
+            .iter()
+            .filter(|mentsu| 
+                matches!(mentsu, Mentsu::Koutsu(_, true)) || 
+                matches!(mentsu, Mentsu::Ankan(_)))
+            .count() == 3
     })
 }
 
 
 fn suuankou(results: &Vec<Vec<Mentsu>>) -> bool {
     results.iter().any(|result| {
-        result.iter().filter(|mentsu| matches!(mentsu, Mentsu::Koutsu(_, true)) || matches!(mentsu, Mentsu::Ankan(_))).count() == 4 
+        result
+            .iter()
+            .filter(|mentsu| 
+                matches!(mentsu, Mentsu::Koutsu(_, true)) || 
+                matches!(mentsu, Mentsu::Ankan(_)))
+            .count() == 4 
     })
 }
 
 
 fn toitoi(results: &Vec<Vec<Mentsu>>) -> bool {
     results.iter().any(|result| {
-        result.iter().filter(|mentsu| matches!(mentsu, Mentsu::Koutsu(_, _)) || matches!(mentsu, Mentsu::Ankan(_)) || matches!(mentsu, Mentsu::Daiminkan(_)) || matches!(mentsu, Mentsu::Shouminkan(_))).count() == 4 
+        result
+            .iter()
+            .filter(|mentsu| 
+                matches!(mentsu, Mentsu::Koutsu(_, _)) || 
+                matches!(mentsu, Mentsu::Ankan(_)) || 
+                matches!(mentsu, Mentsu::Daiminkan(_)) || 
+                matches!(mentsu, Mentsu::Shouminkan(_)))
+            .count() == 4 
     })
 }
 
@@ -396,16 +431,14 @@ fn daisangen(results: &Vec<Vec<Mentsu>>) -> bool {
                 Mentsu::Ankan(tiles) | 
                 Mentsu::Daiminkan(tiles) |
                 Mentsu::Shouminkan(tiles) = mentsu {
-                match tiles[0] {
-                    Tile::Honor(Honor::Red | Honor::Green | Honor::White) => true,
-                    _ => false,
-                }
+                    matches!(tiles[0], Tile::Honor(Honor::Red | Honor::Green | Honor::White))
             } else {
                 false
             }
         }).count() == 3 
     })
 }
+
 
 fn shousangen(results: &Vec<Vec<Mentsu>>) -> bool {
     results.iter().any(|result| {
@@ -415,26 +448,87 @@ fn shousangen(results: &Vec<Vec<Mentsu>>) -> bool {
                 Mentsu::Ankan(tiles) | 
                 Mentsu::Daiminkan(tiles) |
                 Mentsu::Shouminkan(tiles) = mentsu {
-                match tiles[0] {
-                    Tile::Honor(Honor::Red | Honor::Green | Honor::White) => true,
-                    _ => false,
-                }
+                    matches!(tiles[0], Tile::Honor(Honor::Red | Honor::Green | Honor::White))
             } else {
                 false
             }
         }).count() == 2 &&
         result.iter().any(|mentsu| {
             if let Mentsu::Jantou(tiles) = mentsu {
-                match tiles[0] {
-                    Tile::Honor(Honor::Red | Honor::Green | Honor::White) => true,
-                    _ => false,
-                }
+                matches!(tiles[0], Tile::Honor(Honor::Red | Honor::Green | Honor::White))
             } else {
                 false
             }
         })
     })
 }
+
+
+fn chinitsu(hand: &Vec<Tile>) -> bool {
+    hand.iter().all(|x| matches!(x, Tile::Man(_))) || 
+    hand.iter().all(|x| matches!(x, Tile::Pin(_))) || 
+    hand.iter().all(|x| matches!(x, Tile::Sou(_))) 
+}
+
+
+fn honitsu(hand: &Vec<Tile>) -> bool {
+    hand.iter().all(|x| matches!(x, Tile::Man(_)) || is_honor(x)) ||
+    hand.iter().all(|x| matches!(x, Tile::Pin(_)) || is_honor(x)) || 
+    hand.iter().all(|x| matches!(x, Tile::Sou(_)) || is_honor(x)) 
+}
+
+
+fn chanta(results: &Vec<Vec<Mentsu>>) -> bool {
+    results.iter().any(|result| {
+        result.iter().all(|mentsu| {
+            match mentsu {
+                Mentsu::Shuntsu(tiles, _) => {
+                    is_terminal(&tiles[0]) || is_terminal(&tiles[2])
+                }
+                Mentsu::Koutsu(tiles, _) | 
+                Mentsu::Jantou(tiles) | 
+                Mentsu::Ankan(tiles) | 
+                Mentsu::Daiminkan(tiles) | 
+                Mentsu::Shouminkan(tiles)  => {
+                    is_terminal(&tiles[0]) || is_honor(&tiles[0])
+                }
+            }
+        })
+    })
+}
+
+
+fn junchan(results: &Vec<Vec<Mentsu>>) -> bool {
+     results.iter().any(|result| {
+        result.iter().all(|mentsu| {
+            match mentsu {
+                Mentsu::Shuntsu(tiles, _) => {
+                    is_terminal(&tiles[0]) || is_terminal(&tiles[2])
+                }
+                Mentsu::Koutsu(tiles, _) | 
+                Mentsu::Jantou(tiles) | 
+                Mentsu::Ankan(tiles) | 
+                Mentsu::Daiminkan(tiles) | 
+                Mentsu::Shouminkan(tiles)  => {
+                    is_terminal(&tiles[0])
+                }
+            }
+        })
+    })
+}
+
+
+fn sankantsu(player: &Player) -> bool {
+    player.open_mentsu.iter().filter(|mentsu|
+        matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_))).count() == 3 
+}
+
+
+fn suukantsu(player: &Player) -> bool {
+    player.open_mentsu.iter().filter(|mentsu|
+        matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_))).count() == 4 
+}
+
 
 
 fn chiitoitsu(hand: &Vec<Tile>) -> bool {
@@ -555,8 +649,9 @@ fn find_mentsu(remaining: &Vec<Tile>, current: Vec<Mentsu>, results: &mut Vec<Ve
 
 
 
+
 fn main() {
-    let player1 = Player {
+    let mut player1 = Player {
         points: 123,
         jikaze: Winds::East,
         hand: vec![],
@@ -571,20 +666,24 @@ fn main() {
 
     let game = Game {
         rounds: 3,
+        turns: 1,
+        wall: all_tiles(),
         bakaze: Winds::East,
         bullet: 123,
     };
 
-    let mut wall = vec![Tile::Sou(1), Tile::Honor(Honor::Red)];
+    // let mut wall = vec![Tile::Sou(1), Tile::Honor(Honor::Red)];
 
     // logical sorting when player picks up a card
-    let mut hand = vec![Tile::Sou(1), Tile::Honor(Honor::Red)];
-    hand.sort();
-    if let Some(results) = check_win(&hand, &player1) {
+    player1.hand.extend(vec![Tile::Sou(1), Tile::Honor(Honor::Red)]);
+    player1.hand.sort();
+    if let Some(results) = check_win(&player1.hand, &player1) {
+        let mut hand = combine_tiles(&player1);
         // yakuman
         if tsuuisou(&hand){}
         if kokushi_musou(&hand){}
         if daisangen(&results){}
+        if suukantsu(&player1){}
 
         // regular yaku with unusual pattern
         if chiitoitsu(&hand) {}
@@ -592,16 +691,22 @@ fn main() {
         // regular yaku
         if iipeikou(&results) {}  
         if tanyao(&hand) {} // closed
+        if sankantsu(&player1){}
         
         if yakuhai(&player1, &results, &game.bakaze) > 0 {} // open
         
         if toitoi(&results) {}
-        // if honitsu(&hand) {}
+        if honitsu(&hand) {}
+        if chinitsu(&hand) {}
          // other yaku
     
 
     }
 
-
-    println!("{}", is_terminal(&wall[0]));
+    for tile in game.wall {
+        for _ in 0..4 {
+            println!("{:?}", tile);
+        } 
+    }
+    
 }
