@@ -4,7 +4,7 @@
 // 
 // Kokushi Musou (Thirteen Orphans) done
 // Suuankou (Four Concealed Triplets) done
-// Daisangen (Big Three Dragons)
+// Daisangen (Big Three Dragons) done
 // Shousuushii (Little Four Winds)
 // Daisuushii (Big Four Winds)
 // Tsuuiisou (All Honors) done
@@ -33,7 +33,7 @@
 // Ittsu (Straight 1-9)
 // Toitoi (All Triplets)
 // Sanankou (Three Concealed Triplets) done
-// Shousangen (Little Three Dragons)
+// Shousangen (Little Three Dragons) done
 // Honroutou (All Terminals and Honors)
 // Chiitoitsu (Seven Pairs) done
 // Sankantsu (Three Kans)
@@ -84,11 +84,6 @@ enum Mentsu {
     Jantou(Vec<Tile>),
     Koutsu(Vec<Tile>, bool), // true = closed
     Shuntsu(Vec<Tile>, bool),
-    Kantsu(Kantsu),
-}
-
-#[derive(PartialEq, Eq, Clone)]
-enum Kantsu {
     Ankan(Vec<Tile>),
     Daiminkan(Vec<Tile>),
     Shouminkan(Vec<Tile>),
@@ -101,13 +96,20 @@ enum Winds {
     North
 }
 
+#[derive(PartialEq, Eq)]
+enum ChiTilePos { // tile drawn/discarded
+    Left,  
+    Middle, 
+    Right,  
+}
+
 struct Player {
     points: i32,
     hand: Vec<Tile>,
     open_mentsu: Vec<Mentsu>,
     jikaze: Winds,
     is_tenpai: bool,
-    // is_hand_closed: bool,
+    is_hand_closed: bool,
     is_alive: bool,
     aggression: u8,
     defense: u8,
@@ -120,14 +122,24 @@ struct Game {
     bullet: u8,
 }
 
-#[derive(PartialEq, Eq)]
-enum ChiTilePos { // tile drawn/discarded
-    Left,  
-    Middle, 
-    Right,  
-}
 
 impl Player {
+    fn tenpai(&mut self, hand: &Vec<Tile>) -> Vec<Tile> {
+        let mut waiting_on: Vec<Tile> = vec![];
+        for tile in all_tiles() {
+            let mut hand_speculated = hand.clone();
+            hand_speculated.push(tile);
+            if !decompose(&hand_speculated).is_empty() {
+                self.is_tenpai = true;
+                waiting_on.push(tile);
+            }
+        }
+        if waiting_on.is_empty() {
+            self.is_tenpai = false;
+        }
+        waiting_on
+    }
+
     fn remove_tile_from_hand(&mut self, target: &Tile) {
         if let Some(idx) = self.hand.iter().position(|x| x == target) {
             self.hand.remove(idx);
@@ -144,6 +156,7 @@ impl Player {
             for _ in 0..2 {
                 let idx = self.hand.iter().position(|x| x == tile).unwrap();
                 self.hand.remove(idx);
+                self.is_hand_closed = false;
             }
         }
     }
@@ -180,7 +193,7 @@ impl Player {
     fn declare_chi(&mut self, tile: &Tile, pos: ChiTilePos){
         let positions = self.can_declare_chi(tile);
         if !positions.is_empty(){
-            let pos: ChiTilePos = choose_chi_pos_or_something(positions);// let the player choose 
+            let pos: ChiTilePos = ChiTilePos::Middle;// choose_chi_pos_or_something(positions);// let the player choose 
             
             match pos {
                 ChiTilePos::Middle => {
@@ -190,7 +203,7 @@ impl Player {
                     self.remove_tile_from_hand(&next);
                     self.remove_tile_from_hand(&prev);
                     self.open_mentsu.push(Mentsu::Shuntsu(vec![prev, tile.clone(), next], false));
-                    
+                    self.is_hand_closed = false;
                 },
                 ChiTilePos::Left => {
                     let next = next_tile_sequence(tile).unwrap();
@@ -198,7 +211,7 @@ impl Player {
                     self.remove_tile_from_hand(&next);
                     self.remove_tile_from_hand(&next_next);
                     self.open_mentsu.push(Mentsu::Shuntsu(vec![tile.clone(), next, next_next], false));
-                    
+                    self.is_hand_closed = false;
                 },
                 ChiTilePos::Right => {
                     let prev = previous_tile_sequence(tile).unwrap();
@@ -206,6 +219,7 @@ impl Player {
                     self.remove_tile_from_hand(&prev);
                     self.remove_tile_from_hand(&prev_prev);
                     self.open_mentsu.push(Mentsu::Shuntsu(vec![prev_prev, prev, tile.clone()], false));
+                    self.is_hand_closed = false;
                 },
             }
         }
@@ -214,11 +228,12 @@ impl Player {
     fn declare_kan_from_hand(&mut self, tile: &Tile, is_discard: bool) { 
         let count = self.hand.iter().filter(|x| **x == *tile).count();
         if is_discard && count == 3 {
-            self.open_mentsu.push(Mentsu::Kantsu(Kantsu::Daiminkan(vec![tile.clone(); 4])));
+            self.open_mentsu.push(Mentsu::Daiminkan(vec![tile.clone(); 4]));
             self.hand.retain(|x| x != tile);
+            self.is_hand_closed = false;
         } 
         else if !is_discard && count == 4 {
-            self.open_mentsu.push(Mentsu::Kantsu(Kantsu::Ankan(vec![tile.clone(); 4])));
+            self.open_mentsu.push(Mentsu::Ankan(vec![tile.clone(); 4]));
             self.hand.retain(|x| x != tile);
         }  
     }
@@ -228,14 +243,16 @@ impl Player {
             if let Mentsu::Koutsu(tiles, false) = mentsu {
                 if tiles[0] == *tile {
                     // deref to mutate
-                    *mentsu = Mentsu::Kantsu(Kantsu::Shouminkan(vec![tile.clone(); 4]));
+                    *mentsu = Mentsu::Shouminkan(vec![tile.clone(); 4]);
                     self.hand.retain(|x| x != tile);
+                    self.is_hand_closed = false;
                     break;
                 }
             }
         }
     } 
 }
+
 
 fn is_terminal(tile: &Tile) -> bool {
     match tile {
@@ -244,27 +261,37 @@ fn is_terminal(tile: &Tile) -> bool {
     }
 }
 
+
 fn is_honor(tile: &Tile) -> bool {
     matches!(tile, Tile::Honor(_))
 }
+
 
 fn is_yaochuhai(tile: &Tile) -> bool {
     is_terminal(tile) || is_honor(tile)
 }
 
-fn check_win(hand: &Vec<Tile>) -> Option<Vec<Vec<Mentsu>>> {
-    let results = decompose(hand);
+
+fn check_win(hand: &Vec<Tile>, player: &Player) -> Option<Vec<Vec<Mentsu>>> {
+    let mut results = decompose(hand);
     if results.is_empty() {
         None
     } else {
+        if !player.open_mentsu.is_empty() {
+            for result in &mut results {
+                result.extend(player.open_mentsu.clone());
+            }
+        }
         Some(results)
     }
 }
+
 
 fn tanyao(hand: &Vec<Tile>) -> bool {
     // add is_closed cond
     hand.iter().all(|x| !is_yaochuhai(x))    
 }
+
 
 fn kokushi_musou(hand: &Vec<Tile>) -> bool {
     if hand.iter().all(|x| is_yaochuhai(x)) {
@@ -281,15 +308,17 @@ fn kokushi_musou(hand: &Vec<Tile>) -> bool {
     }
     false
 } 
+
         
 
 fn tsuuisou(hand: &Vec<Tile>) -> bool {
     hand.iter().all(|x| is_honor(x))
 }
 
+
 fn iipeikou(results: &Vec<Vec<Mentsu>>) -> bool {
     results.iter().any(|result| {
-        let shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_))).collect();
+        let shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, true))).collect();
  
         for i in 0..shuntsu.len() {
             for j in i+1..shuntsu.len() {
@@ -303,6 +332,7 @@ fn iipeikou(results: &Vec<Vec<Mentsu>>) -> bool {
     })
 }
 
+
 fn wind_to_honor(wind: &Winds) -> Honor {
     match wind {
         Winds::East => Honor::East,
@@ -312,10 +342,15 @@ fn wind_to_honor(wind: &Winds) -> Honor {
     }
 }
 
+
 fn yakuhai(player: &Player, results: &Vec<Vec<Mentsu>>, bakaze: &Winds) -> u8 {
     results.iter().map(|result| {
         result.iter().filter_map(|mentsu| {
-            if let Mentsu::Koutsu(tiles, _) | Mentsu::Kantsu(tiles, _) = mentsu {
+            if let 
+                Mentsu::Koutsu(tiles, _) | 
+                Mentsu::Ankan(tiles) | 
+                Mentsu::Daiminkan(tiles) |
+                Mentsu::Shouminkan(tiles) = mentsu {
                 match &tiles[0] {
                     Tile::Honor(Honor::Red) => Some(1),
                     Tile::Honor(Honor::Green) => Some(1),
@@ -331,17 +366,76 @@ fn yakuhai(player: &Player, results: &Vec<Vec<Mentsu>>, bakaze: &Winds) -> u8 {
     }).max().unwrap_or(0)
 }
 
+
 fn sanankou(results: &Vec<Vec<Mentsu>>) -> bool {
     results.iter().any(|result| {
-        result.iter().filter(|mentsu| matches!(mentsu, Mentsu::Koutsu(_, true))).count() == 3
+        result.iter().filter(|mentsu| matches!(mentsu, Mentsu::Koutsu(_, true)) || matches!(mentsu, Mentsu::Ankan(_))).count() == 3
     })
 }
 
+
 fn suuankou(results: &Vec<Vec<Mentsu>>) -> bool {
     results.iter().any(|result| {
-        result.iter().filter(|mentsu| matches!(mentsu, Mentsu::Koutsu(_, true))).count() == 4 
+        result.iter().filter(|mentsu| matches!(mentsu, Mentsu::Koutsu(_, true)) || matches!(mentsu, Mentsu::Ankan(_))).count() == 4 
     })
 }
+
+
+fn toitoi(results: &Vec<Vec<Mentsu>>) -> bool {
+    results.iter().any(|result| {
+        result.iter().filter(|mentsu| matches!(mentsu, Mentsu::Koutsu(_, _)) || matches!(mentsu, Mentsu::Ankan(_)) || matches!(mentsu, Mentsu::Daiminkan(_)) || matches!(mentsu, Mentsu::Shouminkan(_))).count() == 4 
+    })
+}
+
+
+fn daisangen(results: &Vec<Vec<Mentsu>>) -> bool {
+    results.iter().any(|result| {
+        result.iter().filter(|mentsu| {
+            if let 
+                Mentsu::Koutsu(tiles, _) | 
+                Mentsu::Ankan(tiles) | 
+                Mentsu::Daiminkan(tiles) |
+                Mentsu::Shouminkan(tiles) = mentsu {
+                match tiles[0] {
+                    Tile::Honor(Honor::Red | Honor::Green | Honor::White) => true,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        }).count() == 3 
+    })
+}
+
+fn shousangen(results: &Vec<Vec<Mentsu>>) -> bool {
+    results.iter().any(|result| {
+        result.iter().filter(|mentsu| {
+            if let 
+                Mentsu::Koutsu(tiles, _) | 
+                Mentsu::Ankan(tiles) | 
+                Mentsu::Daiminkan(tiles) |
+                Mentsu::Shouminkan(tiles) = mentsu {
+                match tiles[0] {
+                    Tile::Honor(Honor::Red | Honor::Green | Honor::White) => true,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        }).count() == 2 &&
+        result.iter().any(|mentsu| {
+            if let Mentsu::Jantou(tiles) = mentsu {
+                match tiles[0] {
+                    Tile::Honor(Honor::Red | Honor::Green | Honor::White) => true,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        })
+    })
+}
+
 
 fn chiitoitsu(hand: &Vec<Tile>) -> bool {
     if hand.len() != 14 {return false;}
@@ -354,8 +448,6 @@ fn chiitoitsu(hand: &Vec<Tile>) -> bool {
     }
     true
 } 
-
-
 
 
 fn all_tiles() -> Vec<Tile> {
@@ -376,20 +468,7 @@ fn all_tiles() -> Vec<Tile> {
     tiles
 }
 
-fn tenpai(&mut self, hand: &Vec<Tile>) -> Vec<Tile> {
-    let mut waiting_on: Vec<Tile> = vec![];
-    for tile in all_tiles() {
-        let mut hand_speculated = hand.clone();
-        hand_speculated.push(tile);
-        if !decompose(&hand_speculated).is_empty() {
-            if self.is_tenpai == false {
-                self.is_tenpai = true;
-            }
-            waiting_on.push(tile);
-        }
-    }
-    waiting_on
-}
+
 
 // one hand can return different mentsu varations
 // example: [sou1, sou1, sou1 sou2, sou2, sou2, sou3, sou3, sou3] 
@@ -415,6 +494,7 @@ fn decompose(tiles: &Vec<Tile>) -> Vec<Vec<Mentsu>> {
     results
 }
 
+
 fn next_tile_sequence(tile: &Tile) -> Option<Tile> {
     match tile {
         Tile::Man(n) if *n < 9 => Some(Tile::Man(n + 1)),
@@ -423,6 +503,7 @@ fn next_tile_sequence(tile: &Tile) -> Option<Tile> {
         _ => None, 
     }
 }
+
 
 fn previous_tile_sequence(tile: &Tile) -> Option<Tile> {
     match tile {
@@ -442,7 +523,7 @@ fn find_mentsu(remaining: &Vec<Tile>, current: Vec<Mentsu>, results: &mut Vec<Ve
 
     // koutsu check
     if remaining.len() >= 3 && remaining[0] == remaining[1] && remaining[0] == remaining[2] {
-        let koutsu_group = Mentsu::Koutsu(vec![remaining[0].clone(), remaining[1].clone(), remaining[2].clone()]);
+        let koutsu_group = Mentsu::Koutsu(vec![remaining[0].clone(), remaining[1].clone(), remaining[2].clone()], true);
         let mut new_remaining = remaining.clone();
         for _ in 0..3 {
             new_remaining.remove(0);
@@ -457,7 +538,7 @@ fn find_mentsu(remaining: &Vec<Tile>, current: Vec<Mentsu>, results: &mut Vec<Ve
         if let Some(third) = next_tile_sequence(&second) {
             if let Some(second_seq) = remaining.iter().skip(1).position(|x| *x == second).map(|i| i + 1) {
                 if let Some(third_seq) = remaining.iter().skip(second_seq + 1).position(|x| *x == third).map(|i| i + second_seq + 1) {
-                    let shuntsu_group = Mentsu::Shuntsu(vec![remaining[0].clone(), remaining[second_seq].clone(), remaining[third_seq].clone()]);
+                    let shuntsu_group = Mentsu::Shuntsu(vec![remaining[0].clone(), remaining[second_seq].clone(), remaining[third_seq].clone()], true);
                     let mut new_remaining = remaining.clone();
                     // starts from the highest index
                     for idx in vec![third_seq, second_seq, 0] {
@@ -480,6 +561,7 @@ fn main() {
         jikaze: Winds::East,
         hand: vec![],
         open_mentsu: vec![],
+        is_hand_closed: true,
         is_tenpai: false,
         is_alive: true,
         aggression: 10,
@@ -498,10 +580,11 @@ fn main() {
     // logical sorting when player picks up a card
     let mut hand = vec![Tile::Sou(1), Tile::Honor(Honor::Red)];
     hand.sort();
-    if let Some(results) = check_win(&hand) {
+    if let Some(results) = check_win(&hand, &player1) {
         // yakuman
         if tsuuisou(&hand){}
-        if daisangen(&hand){}
+        if kokushi_musou(&hand){}
+        if daisangen(&results){}
 
         // regular yaku with unusual pattern
         if chiitoitsu(&hand) {}
@@ -513,10 +596,9 @@ fn main() {
         if yakuhai(&player1, &results, &game.bakaze) > 0 {} // open
         
         if toitoi(&results) {}
-        if honitsu(&hand) {}
-        if  {} // other yaku
+        // if honitsu(&hand) {}
+         // other yaku
     
-    } else if { // special yaku like kokushi musou or chiitoitsu
 
     }
 
