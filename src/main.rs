@@ -62,10 +62,10 @@
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 enum Tile {
+    Honor(Honor),
     Man(u8),
     Pin(u8),
     Sou(u8),
-    Honor(Honor),
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
@@ -292,11 +292,11 @@ fn combine_tiles(player: &Player) -> Vec<Tile> {
     let mut result = player.hand.clone();
     for mentsu in &player.open_mentsu {
         if let 
-            Mentsu::Koutsu(tiles, _) |
-            Mentsu::Shuntsu(tiles, _) |
-            Mentsu::Ankan(tiles) |
-            Mentsu::Daiminkan(tiles) |
-            Mentsu::Shouminkan(tiles) = mentsu {
+            Mentsu::Koutsu(tiles, _) 
+                | Mentsu::Shuntsu(tiles, _) 
+                | Mentsu::Ankan(tiles) 
+                | Mentsu::Daiminkan(tiles) 
+                | Mentsu::Shouminkan(tiles) = mentsu {
                 result.extend(tiles)
             }
     };
@@ -365,10 +365,10 @@ fn yakuhai(player: &Player, results: &Vec<Vec<Mentsu>>, bakaze: &Winds) -> u8 {
     results.iter().map(|result| {
         result.iter().filter_map(|mentsu| {
             if let 
-                Mentsu::Koutsu(tiles, _) | 
-                Mentsu::Ankan(tiles) | 
-                Mentsu::Daiminkan(tiles) |
-                Mentsu::Shouminkan(tiles) = mentsu {
+                Mentsu::Koutsu(tiles, _)  
+                    | Mentsu::Ankan(tiles)  
+                    | Mentsu::Daiminkan(tiles)
+                    | Mentsu::Shouminkan(tiles) = mentsu {
                 match &tiles[0] {
                     Tile::Honor(Honor::Red) => Some(1),
                     Tile::Honor(Honor::Green) => Some(1),
@@ -390,8 +390,7 @@ fn sanankou(results: &Vec<Vec<Mentsu>>) -> bool {
         result
             .iter()
             .filter(|mentsu| 
-                matches!(mentsu, Mentsu::Koutsu(_, true)) || 
-                matches!(mentsu, Mentsu::Ankan(_)))
+                matches!(mentsu, Mentsu::Koutsu(_, true) | Mentsu::Ankan(_)))
             .count() == 3
     })
 }
@@ -402,8 +401,7 @@ fn suuankou(results: &Vec<Vec<Mentsu>>) -> bool {
         result
             .iter()
             .filter(|mentsu| 
-                matches!(mentsu, Mentsu::Koutsu(_, true)) || 
-                matches!(mentsu, Mentsu::Ankan(_)))
+                matches!(mentsu, Mentsu::Koutsu(_, true) | Mentsu::Ankan(_)))
             .count() == 4 
     })
 }
@@ -414,10 +412,7 @@ fn toitoi(results: &Vec<Vec<Mentsu>>) -> bool {
         result
             .iter()
             .filter(|mentsu| 
-                matches!(mentsu, Mentsu::Koutsu(_, _)) || 
-                matches!(mentsu, Mentsu::Ankan(_)) || 
-                matches!(mentsu, Mentsu::Daiminkan(_)) || 
-                matches!(mentsu, Mentsu::Shouminkan(_)))
+                matches!(mentsu, Mentsu::Koutsu(_, _) | Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_)))
             .count() == 4 
     })
 }
@@ -427,10 +422,10 @@ fn daisangen(results: &Vec<Vec<Mentsu>>) -> bool {
     results.iter().any(|result| {
         result.iter().filter(|mentsu| {
             if let 
-                Mentsu::Koutsu(tiles, _) | 
-                Mentsu::Ankan(tiles) | 
-                Mentsu::Daiminkan(tiles) |
-                Mentsu::Shouminkan(tiles) = mentsu {
+                Mentsu::Koutsu(tiles, _) 
+                    | Mentsu::Ankan(tiles) 
+                    | Mentsu::Daiminkan(tiles)
+                    | Mentsu::Shouminkan(tiles) = mentsu {
                     matches!(tiles[0], Tile::Honor(Honor::Red | Honor::Green | Honor::White))
             } else {
                 false
@@ -444,10 +439,10 @@ fn shousangen(results: &Vec<Vec<Mentsu>>) -> bool {
     results.iter().any(|result| {
         result.iter().filter(|mentsu| {
             if let 
-                Mentsu::Koutsu(tiles, _) | 
-                Mentsu::Ankan(tiles) | 
-                Mentsu::Daiminkan(tiles) |
-                Mentsu::Shouminkan(tiles) = mentsu {
+                Mentsu::Koutsu(tiles, _) 
+                    | Mentsu::Ankan(tiles) 
+                    | Mentsu::Daiminkan(tiles)
+                    | Mentsu::Shouminkan(tiles) = mentsu {
                     matches!(tiles[0], Tile::Honor(Honor::Red | Honor::Green | Honor::White))
             } else {
                 false
@@ -465,16 +460,16 @@ fn shousangen(results: &Vec<Vec<Mentsu>>) -> bool {
 
 
 fn chinitsu(hand: &Vec<Tile>) -> bool {
-    hand.iter().all(|x| matches!(x, Tile::Man(_))) || 
-    hand.iter().all(|x| matches!(x, Tile::Pin(_))) || 
-    hand.iter().all(|x| matches!(x, Tile::Sou(_))) 
+    hand.iter().all(|x| matches!(x, Tile::Man(_)))
+        || hand.iter().all(|x| matches!(x, Tile::Pin(_))) 
+        || hand.iter().all(|x| matches!(x, Tile::Sou(_))) 
 }
 
 
 fn honitsu(hand: &Vec<Tile>) -> bool {
-    hand.iter().all(|x| matches!(x, Tile::Man(_)) || is_honor(x)) ||
-    hand.iter().all(|x| matches!(x, Tile::Pin(_)) || is_honor(x)) || 
-    hand.iter().all(|x| matches!(x, Tile::Sou(_)) || is_honor(x)) 
+    hand.iter().all(|x| matches!(x, Tile::Man(_)) || is_honor(x)) 
+        || hand.iter().all(|x| matches!(x, Tile::Pin(_)) || is_honor(x)) 
+        || hand.iter().all(|x| matches!(x, Tile::Sou(_)) || is_honor(x)) 
 }
 
 
@@ -485,11 +480,11 @@ fn chanta(results: &Vec<Vec<Mentsu>>) -> bool {
                 Mentsu::Shuntsu(tiles, _) => {
                     is_terminal(&tiles[0]) || is_terminal(&tiles[2])
                 }
-                Mentsu::Koutsu(tiles, _) | 
-                Mentsu::Jantou(tiles) | 
-                Mentsu::Ankan(tiles) | 
-                Mentsu::Daiminkan(tiles) | 
-                Mentsu::Shouminkan(tiles)  => {
+                Mentsu::Koutsu(tiles, _)  
+                    | Mentsu::Jantou(tiles) 
+                    | Mentsu::Ankan(tiles)  
+                    | Mentsu::Daiminkan(tiles) 
+                    | Mentsu::Shouminkan(tiles)  => {
                     is_terminal(&tiles[0]) || is_honor(&tiles[0])
                 }
             }
@@ -505,11 +500,11 @@ fn junchan(results: &Vec<Vec<Mentsu>>) -> bool {
                 Mentsu::Shuntsu(tiles, _) => {
                     is_terminal(&tiles[0]) || is_terminal(&tiles[2])
                 }
-                Mentsu::Koutsu(tiles, _) | 
-                Mentsu::Jantou(tiles) | 
-                Mentsu::Ankan(tiles) | 
-                Mentsu::Daiminkan(tiles) | 
-                Mentsu::Shouminkan(tiles)  => {
+                Mentsu::Koutsu(tiles, _)  
+                    | Mentsu::Jantou(tiles) 
+                    | Mentsu::Ankan(tiles)  
+                    | Mentsu::Daiminkan(tiles) 
+                    | Mentsu::Shouminkan(tiles)  => {
                     is_terminal(&tiles[0])
                 }
             }
@@ -628,23 +623,21 @@ fn find_mentsu(remaining: &Vec<Tile>, current: Vec<Mentsu>, results: &mut Vec<Ve
     }
 
     // shuntsu check
-    if let Some(second) = next_tile_sequence(&remaining[0]) {
-        if let Some(third) = next_tile_sequence(&second) {
-            if let Some(second_seq) = remaining.iter().skip(1).position(|x| *x == second).map(|i| i + 1) {
-                if let Some(third_seq) = remaining.iter().skip(second_seq + 1).position(|x| *x == third).map(|i| i + second_seq + 1) {
-                    let shuntsu_group = Mentsu::Shuntsu(vec![remaining[0].clone(), remaining[second_seq].clone(), remaining[third_seq].clone()], true);
-                    let mut new_remaining = remaining.clone();
-                    // starts from the highest index
-                    for idx in vec![third_seq, second_seq, 0] {
-                        new_remaining.remove(idx);
-                     }
-                    let mut new_current = current.clone();
-                    new_current.push(shuntsu_group);
-                    find_mentsu(&new_remaining, new_current, results);
+    if let Some(second) = next_tile_sequence(&remaining[0]) 
+        && let Some(third) = next_tile_sequence(&second)
+        && let Some(second_seq) = remaining.iter().skip(1).position(|x| *x == second).map(|i| i + 1)
+        && let Some(third_seq) = remaining.iter().skip(second_seq + 1).position(|x| *x == third).map(|i| i + second_seq + 1) {
+            let shuntsu_group = Mentsu::Shuntsu(vec![remaining[0].clone(), remaining[second_seq].clone(), remaining[third_seq].clone()], true);
+            let mut new_remaining = remaining.clone();
+            // starts from the highest index
+            for idx in vec![third_seq, second_seq, 0] {
+                new_remaining.remove(idx);
                 }
-            }
-        }
+            let mut new_current = current.clone();
+            new_current.push(shuntsu_group);
+            find_mentsu(&new_remaining, new_current, results);
     }
+    
 }
 
 
