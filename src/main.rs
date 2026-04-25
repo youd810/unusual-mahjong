@@ -11,8 +11,8 @@
 // !Ryuuiisou (All Green) done
 // !Chuuren Poutou (Nine Gates) done
 // !Suukantsu (Four Kans) done
-// Tenhou (Heavenly Win — dealer wins on first draw)
-// Chiihou (Earthly Win — non-dealer wins on first draw)
+// !Tenhou (Heavenly Win — dealer wins on first draw) done?
+// !Chiihou (Earthly Win — non-dealer wins on first draw) done?
 // 
 // *6 Han
 // !Chinitsu (Full Flush) done
@@ -39,12 +39,12 @@
 // !Tanyao (All Simples) done
 // !Iipeikou (One Set of Identical Sequences) done
 // !Yakuhai / Fanpai (Value Tiles — seat wind, round wind, dragons) done
-// Riichi
+// !Riichi done
 // Ippatsu
 // Menzen Tsumo (Self-draw win with closed hand)
-// Pinfu (No-points hand)
-// Haitei (Win on last tile from wall)
-// Houtei (Win on last discard)
+// !Pinfu (No-points hand) done
+// !Haitei (Win on last tile from wall) done
+// !Houtei (Win on last discard) done
 // Rinshan Kaihou (Win after Kan draw)
 // Chankan (Robbing a Kan)
 // 
@@ -53,6 +53,10 @@
 // Dora counting (not a yaku but affects scoring)
 // Fu calculation
 // Han → Score conversion table
+
+// TODO: return options for some of these
+
+use bevy::prelude::*;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 enum Tile {
@@ -97,15 +101,71 @@ enum ChiTilePos { // tile drawn/discarded
     Right,  
 }
 
+use bevy::prelude::*;
+use rand::{RngExt, seq::SliceRandom};
+
+
+#[derive(Resource)]
+struct GameState {
+    rounds: u8,
+    turns: u8,
+    bakaze: Winds,
+    bullet: u8,
+}
+
+#[derive(Resource)]
+struct Wall(Vec<Tile>);
+
+// components
+#[derive(Component)]
+struct PlayerTag;
+
+#[derive(Component)]
+struct SeatWind(Winds);
+
+#[derive(Component)]
+struct Points(i32);
+
+#[derive(Component)]
+struct Hand(Vec<Tile>);
+
+#[derive(Component)]
+struct OpenMelds(Vec<Mentsu>);
+
+// markers
+#[derive(Component)]
+struct Oya;
+
+#[derive(Component)]
+struct ClosedHand;
+
+#[derive(Component)]
+struct Tenpai;
+
+#[derive(Component)]
+struct Riichi {
+    turns_since: u8,
+}
+
+#[derive(Component)]
+struct Alive;
+
+
+
+
+
+// use or dispose later
 struct Player {
     points: i32,
     hand: Vec<Tile>,
-    drawn: Tile,
-    opponent_discard: Tile,
+    drawn: Option<Tile>,
+    
     open_mentsu: Vec<Mentsu>,
     jikaze: Winds,
     is_tenpai: bool,
     is_hand_closed: bool,
+    is_riichi: bool,
+    turns_since_riichi: u8,
     is_alive: bool,
     aggression: u8,
     defense: u8,
@@ -115,14 +175,16 @@ struct Player {
 struct Game {
     rounds: u8,
     turns: u8,
+    oya: Player,
     wall: Vec<Tile>,
     bakaze: Winds,
     bullet: u8,
+    player_discard: Option<Tile>,
 }
 
 
 impl Player {
-    fn tenpai(&mut self, hand: &[Tile]) -> Vec<Tile> {
+    fn tenpai(&mut self, hand: &[Tile]) -> Vec<Tile> { // this should be hand + open mentsu
         let mut waiting_on: Vec<Tile> = vec![];
         for tile in all_tiles() {
             let mut hand_speculated = hand.to_owned();
@@ -138,12 +200,28 @@ impl Player {
         waiting_on
     }
 
+    fn tenpai_payout_system(mut query: Query<&mut Points, With<Tenpai>>) {
+        for mut player_points in &mut query {
+            player_points.0 += 1000;
+        }
+    }
+
+
+    fn can_declare_riichi(&mut self, hand: &[Tile]) -> bool {
+        !self.tenpai(hand).is_empty() && self.is_hand_closed
+    }
+
+    fn declare_riichi(&mut self) {
+        self.points -= 1000;
+        self.is_riichi = true
+    }
+
     fn remove_tile_from_hand(&mut self, target: &Tile) {
         if let Some(idx) = self.hand.iter().position(|x| x == target) {
             self.hand.remove(idx);
         }
     }
-
+    
     fn can_declare_pon(&mut self, tile: &Tile,) -> bool {
         self.hand.iter().filter(|x| **x == *tile).count() >= 2
     }
@@ -233,14 +311,13 @@ impl Player {
 
     fn declare_kan_from_meld(&mut self, tile: &Tile) {
         for mentsu in &mut self.open_mentsu {
-            if let Mentsu::Koutsu(tiles, false) = mentsu
-                && tiles[0] == *tile {
-                    // deref to mutate
-                    *mentsu = Mentsu::Shouminkan(vec![*tile; 4]);
-                    self.hand.retain(|x| x != tile);
-                    self.is_hand_closed = false;
-                    break;
-                }
+            if let Mentsu::Koutsu(tiles, false) = mentsu && tiles[0] == *tile {
+                // deref to mutate
+                *mentsu = Mentsu::Shouminkan(vec![*tile; 4]);
+                self.hand.retain(|x| x != tile);
+                self.is_hand_closed = false;
+                break;
+            }
         }
     } 
 }
@@ -256,7 +333,7 @@ fn is_honor(tile: &Tile) -> bool {
 }
 
 
-fn is_yaochuhai(tile: &Tile) -> bool {
+fn is_yaochuuhai(tile: &Tile) -> bool {
     is_terminal(tile) || is_honor(tile)
 }
 
@@ -304,12 +381,12 @@ fn combine_tiles(player: &Player) -> Vec<Tile> {
 
 fn tanyao(hand: &[Tile]) -> bool {
     // add is_closed cond
-    hand.iter().all(|x| !is_yaochuhai(x))    
+    hand.iter().all(|x| !is_yaochuuhai(x))    
 }
 
 
 fn kokushi_musou(hand: &[Tile]) -> bool {
-    if hand.iter().all(is_yaochuhai) {
+    if hand.iter().all(is_yaochuuhai) {
         let mut pair_counter: u8 = 0;
         for i in 0..hand.len() - 1 {
             if hand[i] == hand[i+1] {
@@ -437,6 +514,7 @@ fn daisangen(results: &[Vec<Mentsu>]) -> bool {
     })
 }
 
+
 fn shousangen(results: &[Vec<Mentsu>]) -> bool {
     results.iter().any(|result| {
         let dragon_kou_or_kan = has_koutsu_or_kan(result, Tile::Honor(Honor::Red)) as u8
@@ -558,7 +636,7 @@ fn chiitoitsu(hand: &[Tile]) -> bool {
 
 
 fn honroutou(hand: &[Tile]) -> bool {
-    hand.iter().all(is_yaochuhai)
+    hand.iter().all(is_yaochuuhai)
 }
 
 
@@ -668,6 +746,82 @@ fn chuuren_poutou(hand: &[Tile]) -> bool {
 }
 
 
+fn is_ryanmen_wait(shuntsu_tiles: &[Tile], winning_tile: &Tile) -> bool {
+    if shuntsu_tiles[0] == *winning_tile {
+        // left machi (accepts 1/4)
+        !matches!(winning_tile, Tile::Man(7) | Tile::Pin(7) | Tile::Sou(7))
+    } else if shuntsu_tiles[2] == *winning_tile {
+        // right machi (accepts 6/9)
+        !matches!(winning_tile, Tile::Man(3) | Tile::Pin(3) | Tile::Sou(3))
+    } else {
+        false
+    }
+}
+
+
+fn pinfu(player: &Player, game: &Game, results: &[Vec<Mentsu>], winning_tile: &Tile) -> bool {
+    if !player.is_hand_closed {
+        return false;
+    }
+    results.iter().any(|result| {
+        let mut shuntsu_count = 0;
+        let mut has_ryanmen = false;
+        let mut has_valid_jantou = false;
+
+        for mentsu in result {
+            
+            match mentsu {
+                Mentsu::Shuntsu(tiles, true) => {
+                    shuntsu_count += 1;
+                    if is_ryanmen_wait(tiles, winning_tile) {
+                        has_ryanmen = true;
+                    }
+                }
+                Mentsu::Jantou(tiles) => {
+                    has_valid_jantou = match tiles[0] {
+                        Tile::Honor(Honor::Red | Honor::Green | Honor::White) => false,
+                        Tile::Honor(h) if h == wind_to_honor(&player.jikaze) => false,
+                        Tile::Honor(h) if h == wind_to_honor(&game.bakaze) => false,
+                        _ => true,
+                    };
+                }
+                _ => {}
+            }
+        }
+        shuntsu_count == 4 && has_ryanmen && has_valid_jantou
+    })
+}
+
+
+fn haitei(wall: &Wall, is_tsumo: bool) -> bool {
+    wall.0.len() == 14 && is_tsumo
+}
+
+fn houtei(wall: &Wall, is_tsumo: bool) -> bool {
+    wall.0.len() == 14 && !is_tsumo
+}
+
+fn tenhou(game: &GameState, is_oya: bool, is_tsumo: bool) -> bool {
+    game.turns == 0 && is_oya && is_tsumo
+} 
+
+fn chihou(game: &GameState, is_oya: bool, is_tsumo: bool) -> bool {
+    game.turns == 0 && !is_oya && is_tsumo
+} 
+
+
+fn check_win_system(
+    query: Query<(&Hand, Has<Oya>, Has<Riichi>)>,
+    game_state: Res<GameState>,
+) {
+    for (hand, is_oya) in &query {
+        if tenhou(&game_state, is_oya, true) {
+        }
+    }
+}
+
+
+
 fn all_tiles() -> Vec<Tile> {
     // will compare vec vs array later
     let mut tiles = vec![];
@@ -769,70 +923,109 @@ fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<Vec<M
 }
 
 
+fn start_game(mut commands: Commands) {
+    let mut wall = vec![];
+    for _ in 0..4 {
+        wall.extend(all_tiles());
+    }
+    wall.shuffle(&mut rand::rng());
+    
+    commands.spawn((
+        PlayerTag, 
+        Points(25000),
+        SeatWind(Winds::East),
+        Hand(vec![]),
+        OpenMelds(vec![]),
+        Alive,
+        ClosedHand,
+        Oya,
+    ));
+    commands.insert_resource(
+        GameState { 
+            rounds: 0, 
+            turns: 0, 
+            bakaze: Winds::East, 
+            bullet: 1,
+        }
+    );
+    commands.insert_resource(
+        Wall(wall)
+    )
+}
 
 
 fn main() {
-    let mut player1 = Player {
-        points: 123,
-        jikaze: Winds::East,
-        hand: vec![],
-        drawn: Tile::Man(3),
-        opponent_discard: Tile::Man(4),
-        open_mentsu: vec![],
-        is_hand_closed: true,
-        is_tenpai: false,
-        is_alive: true,
-        aggression: 10,
-        defense: 10,
-        cheating_inclination: 10, 
-    };
 
-    let game = Game {
-        rounds: 3,
-        turns: 1,
-        wall: all_tiles(),
-        bakaze: Winds::East,
-        bullet: 123,
-    };
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .add_systems(Startup, start_game)
+        .run();
 
-    // let mut wall = vec![Tile::Sou(1), Tile::Honor(Honor::Red)];
 
-    // logical sorting when player picks up a card
-    player1.hand.extend(vec![Tile::Sou(1), Tile::Honor(Honor::Red)]);
-    player1.hand.sort();
-    if let Some(results) = check_win(&player1.hand, &player1) {
 
-        kokushi_musou(&player1.hand);
-        let hand = combine_tiles(&player1);
-        kokushi_musou(&player1.hand);
-        // yakuman
-        tsuuisou(&hand);
-        
-        daisangen(&results);
-        suukantsu(&player1);
 
-        // regular yaku with unusual pattern
-        chiitoitsu(&hand);
-
-        // regular yaku
-        iipeikou(&results);  
-        tanyao(&hand); // closed
-        sankantsu(&player1);
-        
-        yakuhai(&player1, &results, &game.bakaze); // open
-        
-        toitoi(&results);
-        honitsu(&hand);
-        if chinitsu(&hand) {}
-         // other yaku
     
-
-    }
-
-    for tile in game.wall {
-        for _ in 0..4 {
-            println!("{:?}", tile);
-        } 
-    }
+    //let mut player1 = Player {
+    //    points: 123,
+    //    jikaze: Winds::East,
+    //    hand: vec![],
+    //    drawn: Tile::Man(3),
+    //    opponent_discard: Tile::Man(4),
+    //    open_mentsu: vec![],
+    //    is_hand_closed: true,
+    //    is_tenpai: false,
+    //    is_alive: true,
+    //    aggression: 10,
+    //    defense: 10,
+    //    cheating_inclination: 10, 
+    //};
+//
+    //let game = Game {
+    //    rounds: 3,
+    //    turns: 1,
+    //    wall: all_tiles(),
+    //    bakaze: Winds::East,
+    //    bullet: 123,
+    //};
+//
+    //// let mut wall = vec![Tile::Sou(1), Tile::Honor(Honor::Red)];
+//
+    //// logical sorting when player picks up a card
+    //player1.hand.extend(vec![Tile::Sou(1), Tile::Honor(Honor::Red)]);
+    //player1.hand.sort();
+    //if let Some(results) = check_win(&player1.hand, &player1) {
+//
+    //    kokushi_musou(&player1.hand);
+    //    let hand = combine_tiles(&player1);
+    //    kokushi_musou(&player1.hand);
+    //    // yakuman
+    //    tsuuisou(&hand);
+    //    
+    //    daisangen(&results);
+    //    suukantsu(&player1);
+//
+    //    // regular yaku with unusual pattern
+    //    chiitoitsu(&hand);
+//
+    //    // regular yaku
+    //    iipeikou(&results);  
+    //    tanyao(&hand); // closed
+    //    sankantsu(&player1);
+    //    
+    //    yakuhai(&player1, &results, &game.bakaze); // open
+    //    
+    //    toitoi(&results);
+    //    honitsu(&hand);
+    //    if chinitsu(&hand) {}
+    //     // other yaku
+    //
+//
+    //}
+//
+    //for tile in game.wall {
+    //    for _ in 0..4 {
+    //        println!("{:?}", tile);
+    //    } 
+    //}
     
 }
