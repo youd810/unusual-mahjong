@@ -31,7 +31,7 @@
 // !Sanankou (Three Concealed Triplets) done
 // !Shousangen (Little Three Dragons) done
 // !Honroutou (All Terminals and Honors) done
-// !Chiitoitsu (Seven Pairs) done
+// TODO Chiitoitsu (Seven Pairs) nuh yet
 // !Sankantsu (Three Kans) done
 // Double Riichi
 // 
@@ -54,9 +54,10 @@
 // Fu calculation
 // Han → Score conversion table
 
-// TODO: return options for some of these
+// TODO: return options for some of these (no)
 
 use bevy::prelude::*;
+use rand::{RngExt, seq::SliceRandom};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 enum Tile {
@@ -101,9 +102,6 @@ enum ChiTilePos { // tile drawn/discarded
     Right,  
 }
 
-use bevy::prelude::*;
-use rand::{RngExt, seq::SliceRandom};
-
 
 #[derive(Resource)]
 struct GameState {
@@ -130,7 +128,7 @@ struct Points(i32);
 struct Hand(Vec<Tile>);
 
 #[derive(Component)]
-struct OpenMelds(Vec<Mentsu>);
+struct OpenMentsu(Vec<Mentsu>);
 
 // markers
 #[derive(Component)]
@@ -150,9 +148,34 @@ struct Riichi {
 #[derive(Component)]
 struct Alive;
 
+#[derive(Message)]
+struct DeclarePonMessage {
+    player: Entity,       // gets the specific player (important)
+    tile: Tile,           
+}
+
+#[derive(Message)]
+struct DeclareChiMessage {
+    player: Entity,       
+    tile: Tile,           
+    pos: ChiTilePos,      
+}
+
+#[derive(Message)]
+struct DeclareKanMessage {
+    player: Entity,       
+    tile: Tile,           
+    is_discard: bool,
+}
 
 
 
+struct HandResult {
+    yaku_names: Vec<String>,
+    total_han: u8,
+    total_fu: u8,
+    is_yakuman: bool,
+}
 
 // use or dispose later
 struct Player {
@@ -172,6 +195,7 @@ struct Player {
     cheating_inclination: u8, 
 }
 
+// same with this
 struct Game {
     rounds: u8,
     turns: u8,
@@ -183,143 +207,183 @@ struct Game {
 }
 
 
-impl Player {
-    fn tenpai(&mut self, hand: &[Tile]) -> Vec<Tile> { // this should be hand + open mentsu
-        let mut waiting_on: Vec<Tile> = vec![];
-        for tile in all_tiles() {
-            let mut hand_speculated = hand.to_owned();
-            hand_speculated.push(tile);
-            if !decompose(&hand_speculated).is_empty() {
-                self.is_tenpai = true;
-                waiting_on.push(tile);
-            }
-        }
-        if waiting_on.is_empty() {
-            self.is_tenpai = false;
-        }
-        waiting_on
-    }
 
-    fn tenpai_payout_system(mut query: Query<&mut Points, With<Tenpai>>) {
-        for mut player_points in &mut query {
-            player_points.0 += 1000;
+fn tenpai(hand: &[Tile]) -> Vec<Tile> { // TODO: this should be raw hand + open mentsu
+    let mut waiting_on: Vec<Tile> = vec![];
+    for tile in all_tiles() {
+        let mut hand_speculated = hand.to_owned();
+        hand_speculated.push(tile);
+        if !decompose(&hand_speculated).is_empty() {
+            self.is_tenpai = true;
+            waiting_on.push(tile);
         }
     }
-
-
-    fn can_declare_riichi(&mut self, hand: &[Tile]) -> bool {
-        !self.tenpai(hand).is_empty() && self.is_hand_closed
+    if waiting_on.is_empty() {
+        self.is_tenpai = false;
     }
+    waiting_on
+}
 
-    fn declare_riichi(&mut self) {
-        self.points -= 1000;
-        self.is_riichi = true
+fn tenpai_payout_system(mut query: Query<&mut Points, With<Tenpai>>) {
+    for mut player_points in &mut query {
+        player_points.0 += 1000;
     }
+}
 
+
+fn can_declare_riichi(hand: &[Tile]) -> bool { // ! TODO
+    !self.tenpai(hand).is_empty() && self.is_hand_closed
+}
+
+fn declare_riichi(&mut self) { // ! TODO
+    self.points -= 1000;
+    self.is_riichi = true
+}
+
+impl Hand {
     fn remove_tile_from_hand(&mut self, target: &Tile) {
-        if let Some(idx) = self.hand.iter().position(|x| x == target) {
-            self.hand.remove(idx);
+        if let Some(idx) = self.0.iter().position(|x| x == target) {
+            self.0.remove(idx);
         }
     }
-    
-    fn can_declare_pon(&mut self, tile: &Tile,) -> bool {
-        self.hand.iter().filter(|x| **x == *tile).count() >= 2
-    }
+}
 
-    fn declare_pon(&mut self, tile: &Tile,) {
-        if self.can_declare_pon(tile) {
-            self.open_mentsu.push(Mentsu::Koutsu(vec![*tile; 3], false));
-            for _ in 0..2 {
-                let idx = self.hand.iter().position(|x| x == tile).unwrap();
-                self.hand.remove(idx);
-                self.is_hand_closed = false;
+fn can_declare_pon(hand: &[Tile], tile: &Tile,) -> bool {
+    hand.iter().filter(|x| **x == *tile).count() >= 2
+}
+
+fn declare_pon(
+    mut messages: MessageReader<DeclarePonMessage>,
+    mut query: Query<(&mut Hand, &mut OpenMentsu)>,
+    mut commands: Commands,
+) {
+    for message in messages.read(){
+        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player){
+            if can_declare_pon(&hand.0 ,&message.tile) {
+                open_mentsu.0.push(Mentsu::Koutsu(vec![message.tile; 3], false));
+                for _ in 0..2 {
+                    let idx = hand.0.iter().position(|x| *x == message.tile).unwrap();
+                    hand.0.remove(idx);
+                }
+                commands.entity(message.player).remove::<ClosedHand>();
             }
         }
     }
+}
 
-    fn can_declare_chi(&mut self, tile: &Tile) -> Vec<ChiTilePos> {
-        let mut results = vec![];
+fn can_declare_chi(hand: &[Tile], tile: &Tile) -> Vec<ChiTilePos> {
+    let mut results = vec![];
 
-        // safe 'unwrap' with if let
-        if let (Some(prev), Some(next)) = (previous_tile_sequence(tile), next_tile_sequence(tile))
-            && self.hand.contains(&prev) && self.hand.contains(&next) {
-                results.push(ChiTilePos::Middle);
-        }
-
-        if let Some(next) = next_tile_sequence(tile)
-            && let Some(next_next) = next_tile_sequence(&next)
-            && self.hand.contains(&next) && self.hand.contains(&next_next) {
-                results.push(ChiTilePos::Left);
-        }
-
-        if let Some(prev) = previous_tile_sequence(tile)
-            && let Some(prev_prev) = previous_tile_sequence(&prev)
-            && self.hand.contains(&prev) && self.hand.contains(&prev_prev) {
-                results.push(ChiTilePos::Right);
-        }
-
-        results
+    // safe 'unwrap' with if let
+    if let (Some(prev), Some(next)) = (previous_tile_sequence(tile), next_tile_sequence(tile))
+        && hand.contains(&prev) && hand.contains(&next) {
+            results.push(ChiTilePos::Middle);
     }
 
-    fn declare_chi(&mut self, tile: &Tile, pos: ChiTilePos){
-        let positions = self.can_declare_chi(tile);
-        if !positions.is_empty(){
-            let pos: ChiTilePos = ChiTilePos::Middle;// choose_chi_pos_or_something(positions);// let the player choose 
-            
-            match pos {
-                ChiTilePos::Middle => {
-                    let next = next_tile_sequence(tile).unwrap();
-                    let prev = previous_tile_sequence(tile).unwrap();
-                    // use the variables as a pointer for removal first b4 moving the value 
-                    self.remove_tile_from_hand(&next);
-                    self.remove_tile_from_hand(&prev);
-                    self.open_mentsu.push(Mentsu::Shuntsu(vec![prev, *tile, next], false));
-                    self.is_hand_closed = false;
-                },
-                ChiTilePos::Left => {
-                    let next = next_tile_sequence(tile).unwrap();
-                    let next_next = next_tile_sequence(&next).unwrap();
-                    self.remove_tile_from_hand(&next);
-                    self.remove_tile_from_hand(&next_next);
-                    self.open_mentsu.push(Mentsu::Shuntsu(vec![*tile, next, next_next], false));
-                    self.is_hand_closed = false;
-                },
-                ChiTilePos::Right => {
-                    let prev = previous_tile_sequence(tile).unwrap();
-                    let prev_prev = previous_tile_sequence(&prev).unwrap();
-                    self.remove_tile_from_hand(&prev);
-                    self.remove_tile_from_hand(&prev_prev);
-                    self.open_mentsu.push(Mentsu::Shuntsu(vec![prev_prev, prev, *tile], false));
-                    self.is_hand_closed = false;
-                },
+    if let Some(next) = next_tile_sequence(tile)
+        && let Some(next_next) = next_tile_sequence(&next)
+        && hand.contains(&next) && hand.contains(&next_next) {
+            results.push(ChiTilePos::Left);
+    }
+
+    if let Some(prev) = previous_tile_sequence(tile)
+        && let Some(prev_prev) = previous_tile_sequence(&prev)
+        && hand.contains(&prev) && hand.contains(&prev_prev) {
+            results.push(ChiTilePos::Right);
+    }
+
+    results
+}
+
+fn declare_chi(
+    mut messages: MessageReader<DeclareChiMessage>,
+    mut query: Query<(&mut Hand, &mut OpenMentsu)>,
+    mut commands: Commands
+) {
+    for message in messages.read() {
+        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player){
+            let positions = can_declare_chi(&hand.0, &message.tile);
+            if !positions.is_empty() && positions.contains(&message.pos) {
+                let pos: &ChiTilePos = &message.pos; // let the player choose 
+                let tile = &message.tile;
+
+                match pos {
+                    ChiTilePos::Middle => {
+                        let next = next_tile_sequence(tile).unwrap();
+                        let prev = previous_tile_sequence(tile).unwrap();
+                        // use the variables as a pointer for removal first b4 moving the value 
+                        hand.remove_tile_from_hand(&next);
+                        hand.remove_tile_from_hand(&prev);
+                        open_mentsu.0.push(Mentsu::Shuntsu(vec![prev, *tile, next], false));
+                        commands.entity(message.player).remove::<ClosedHand>();
+                    },
+                    ChiTilePos::Left => {
+                        let next = next_tile_sequence(tile).unwrap();
+                        let next_next = next_tile_sequence(&next).unwrap();
+                        hand.remove_tile_from_hand(&next);
+                        hand.remove_tile_from_hand(&next_next);
+                        open_mentsu.0.push(Mentsu::Shuntsu(vec![*tile, next, next_next], false));
+                        commands.entity(message.player).remove::<ClosedHand>();
+                    },
+                    ChiTilePos::Right => {
+                        let prev = previous_tile_sequence(tile).unwrap();
+                        let prev_prev = previous_tile_sequence(&prev).unwrap();
+                        hand.remove_tile_from_hand(&prev);
+                        hand.remove_tile_from_hand(&prev_prev);
+                        open_mentsu.0.push(Mentsu::Shuntsu(vec![prev_prev, prev, *tile], false));
+                        commands.entity(message.player).remove::<ClosedHand>();
+                    },
+                }
+
             }
         }
     }
+}
 
-    fn declare_kan_from_hand(&mut self, tile: &Tile, is_discard: bool) { 
-        let count = self.hand.iter().filter(|x| **x == *tile).count();
-        if is_discard && count == 3 {
-            self.open_mentsu.push(Mentsu::Daiminkan(vec![*tile; 4]));
-            self.hand.retain(|x| x != tile);
-            self.is_hand_closed = false;
-        } 
-        else if !is_discard && count == 4 {
-            self.open_mentsu.push(Mentsu::Ankan(vec![*tile; 4]));
-            self.hand.retain(|x| x != tile);
-        }  
-    }
 
-    fn declare_kan_from_meld(&mut self, tile: &Tile) {
-        for mentsu in &mut self.open_mentsu {
-            if let Mentsu::Koutsu(tiles, false) = mentsu && tiles[0] == *tile {
-                // deref to mutate
-                *mentsu = Mentsu::Shouminkan(vec![*tile; 4]);
-                self.hand.retain(|x| x != tile);
-                self.is_hand_closed = false;
-                break;
+fn can_declare_kan_from_hand(hand: &[Tile], tile: &Tile) -> u8 {
+    hand.iter().filter(|x| *x == tile).count() as u8
+}
+
+fn can_declare_kan_from_pon(open_mentsu: &[Mentsu], tile: &Tile) -> bool{
+    open_mentsu.iter().any(|mentsu| {
+        if let Mentsu::Koutsu(tiles, false) = mentsu && tiles[0] == *tile {
+            true
+        } else {false}
+    }) 
+}
+
+
+fn declare_kan(
+    mut messages: MessageReader<DeclareKanMessage>,
+    mut query: Query<(&mut Hand, &mut OpenMentsu)>,
+    mut commands: Commands
+) { 
+    for message in messages.read() {
+        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player){
+            let tile = &message.tile;
+            let count = can_declare_kan_from_hand(&hand.0, tile);
+            if message.is_discard && count == 3 {
+                open_mentsu.0.push(Mentsu::Daiminkan(vec![*tile; 4]));
+                hand.0.retain(|x| x != tile);
+                commands.entity(message.player).remove::<ClosedHand>();
+            } 
+            else if !message.is_discard && count == 4 {
+                open_mentsu.0.push(Mentsu::Ankan(vec![*tile; 4]));
+                hand.0.retain(|x| x != tile);
+            }  
+            else if !message.is_discard { // this check should be enough hopefully
+                for mentsu in &mut open_mentsu.0 {
+                    if let Mentsu::Koutsu(tiles, false) = mentsu && tiles[0] == *tile {
+                        // deref to mutate
+                        *mentsu = Mentsu::Shouminkan(vec![*tile; 4]);
+                        hand.0.retain(|x| x != tile);
+                        break;
+                    } 
+                }
             }
         }
-    } 
+    }
 }
 
 
@@ -458,6 +522,7 @@ fn yakuhai(player: &Player, results: &[Vec<Mentsu>], bakaze: &Winds) -> u8 {
                     | Mentsu::Daiminkan(tiles)
                     | Mentsu::Shouminkan(tiles) = mentsu {
                 match &tiles[0] {
+                    // ! consider changing this to | operator
                     Tile::Honor(Honor::Red) => Some(1),
                     Tile::Honor(Honor::Green) => Some(1),
                     Tile::Honor(Honor::White) => Some(1),
@@ -582,7 +647,7 @@ fn chanta(results: &[Vec<Mentsu>]) -> bool {
                     | Mentsu::Ankan(tiles)  
                     | Mentsu::Daiminkan(tiles) 
                     | Mentsu::Shouminkan(tiles)  => {
-                    is_terminal(&tiles[0]) || is_honor(&tiles[0])
+                    is_yaochuuhai(&tiles[0])
                 }
             }
         })
@@ -622,7 +687,7 @@ fn suukantsu(player: &Player) -> bool {
 }
 
 
-fn chiitoitsu(hand: &[Tile]) -> bool {
+fn chiitoitsu(hand: &[Tile]) -> bool { // TODO: filter out 2 similar toitsu
     if hand.len() != 14 {return false;}
     let mut i = 0;
     while i < hand.len() - 1 {
@@ -805,13 +870,13 @@ fn tenhou(game: &GameState, is_oya: bool, is_tsumo: bool) -> bool {
     game.turns == 0 && is_oya && is_tsumo
 } 
 
-fn chihou(game: &GameState, is_oya: bool, is_tsumo: bool) -> bool {
+fn chiihou(game: &GameState, is_oya: bool, is_tsumo: bool) -> bool {
     game.turns == 0 && !is_oya && is_tsumo
 } 
 
 
 fn check_win_system(
-    query: Query<(&Hand, Has<Oya>, Has<Riichi>)>,
+    query: Query<(&Hand, Has<Oya>, Has<Riichi>, Has<ClosedHand> )>,
     game_state: Res<GameState>,
 ) {
     for (hand, is_oya) in &query {
@@ -923,6 +988,227 @@ fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<Vec<M
 }
 
 
+
+fn evaluate_yaku(
+    // !add raw hand also
+    results: &[Vec<Mentsu>],             
+    combined_hand: &[Tile],        
+    player: &Player,
+    game: &GameState,
+    winning_tile: &Tile,
+    is_tsumo: bool,
+    is_oya: bool,
+    is_kan_replacement: bool,
+    is_ippatsu: bool,
+) -> HandResult {
+    let mut eval = HandResult {
+        yaku_names: vec![],
+        total_han: 0,
+        total_fu: 0,
+        is_yakuman: false,
+    };
+
+    let closed = player.is_hand_closed;
+
+
+    // ! todo: chiitoitsu and kokushi (passing raw hand as arg)
+
+    // yakuman
+    if closed && chuuren_poutou(combined_hand) { 
+        eval.yaku_names.push("Chuuren Poutou".to_string()); 
+        eval.is_yakuman = true; 
+    }
+
+    if suuankou(results) { 
+        eval.yaku_names.push("Suuankou".to_string()); 
+        eval.is_yakuman = true; 
+    }
+
+    if daisuushii(results) { 
+        eval.yaku_names.push("Daisuushii".to_string()); 
+        eval.is_yakuman = true; 
+    }
+
+    if shousuushii(results) { 
+        eval.yaku_names.push("Shousuushii".to_string()); 
+        eval.is_yakuman = true; 
+    }
+
+    if daisangen(results) { 
+        eval.yaku_names.push("Daisangen".to_string()); 
+        eval.is_yakuman = true; 
+    }
+
+    if tsuuisou(combined_hand) { 
+        eval.yaku_names.push("Tsuuiisou".to_string()); 
+        eval.is_yakuman = true; 
+    }
+
+    if chinroutou(combined_hand) { 
+        eval.yaku_names.push("Chinroutou".to_string()); 
+        eval.is_yakuman = true; 
+    }
+
+    if ryuuiisou(combined_hand) {
+        eval.yaku_names.push("Ryuuiisou".to_string()); 
+        eval.is_yakuman = true; 
+    }
+
+    if suukantsu(player) { 
+        eval.yaku_names.push("Suukantsu".to_string()); 
+        eval.is_yakuman = true; 
+    }
+
+    if tenhou(game, is_oya, is_tsumo) { 
+        eval.yaku_names.push("Tenhou".to_string()); 
+        eval.is_yakuman = true; 
+    }
+    if chiihou(game, is_oya, is_tsumo) { 
+        eval.yaku_names.push("Chiihou".to_string()); 
+        eval.is_yakuman = true; 
+    }
+
+    if eval.is_yakuman {
+        return eval; 
+    }
+
+
+    // upgradable yaku
+    if chinitsu(combined_hand) {
+        eval.yaku_names.push("Chinitsu".to_string());
+        eval.total_han += if closed { 6 } else { 5 };
+    } else if honitsu(combined_hand) {
+        eval.yaku_names.push("Honitsu".to_string());
+        eval.total_han += if closed { 3 } else { 2 };
+    }
+
+    if junchan(results) {
+        eval.yaku_names.push("Junchan".to_string());
+        eval.total_han += if closed { 3 } else { 2 };
+    } else if chanta(results) { 
+        eval.yaku_names.push("Chanta".to_string());
+        eval.total_han += if closed { 2 } else { 1 };
+    }
+
+    if closed {
+        if ryanpeikou(results) {
+            eval.yaku_names.push("Ryanpeikou".to_string());
+            eval.total_han += 3;
+        } else if iipeikou(results) {
+            eval.yaku_names.push("Iipeikou".to_string());
+            eval.total_han += 1;
+        }
+    }
+
+
+    // common yaku 
+
+    // kuitan enjoyer
+    if tanyao(combined_hand) { 
+        eval.yaku_names.push("Tanyao".to_string()); 
+        eval.total_han += 1; 
+    }
+
+    if ittsuu(results) {
+        eval.yaku_names.push("Ittsuu".to_string());
+        eval.total_han += if closed { 2 } else { 1 };
+    }
+
+    if sanshoku_doujun(results) {
+        eval.yaku_names.push("Sanshoku Doujun".to_string());
+        eval.total_han += if closed { 2 } else { 1 };
+    }
+
+    if sanshoku_doukou(results) { 
+        eval.yaku_names.push("Sanshoku Doukou".to_string()); 
+        eval.total_han += 2; 
+    }
+
+    if toitoi(results) { 
+        eval.yaku_names.push("Toitoi".to_string()); 
+        eval.total_han += 2; 
+    }
+
+    if sanankou(results) { 
+        eval.yaku_names.push("Sanankou".to_string()); 
+        eval.total_han += 2; 
+    }
+
+    if shousangen(results) { 
+        eval.yaku_names.push("Shousangen".to_string()); 
+        eval.total_han += 2; 
+    }
+
+    if honroutou(combined_hand) { 
+        eval.yaku_names.push("Honroutou".to_string()); 
+        eval.total_han += 2; 
+    }
+
+    if sankantsu(player) { 
+        eval.yaku_names.push("Sankantsu".to_string()); 
+        eval.total_han += 2; 
+    }
+
+    if closed && pinfu(player, game, results, winning_tile) { 
+        eval.yaku_names.push("Pinfu".to_string()); 
+        eval.total_han += 1; 
+    }
+
+    let yakuhai_count = yakuhai(player, results, &game.bakaze);
+    if yakuhai_count > 0 {
+        eval.yaku_names.push(format!("Yakuhai ({} sets)", yakuhai_count));
+        eval.total_han += yakuhai_count;
+    }
+
+
+    // circumstantial
+    if closed && is_tsumo { 
+        eval.yaku_names.push("Menzen Tsumo".to_string()); 
+        eval.total_han += 1; 
+    }
+
+    if player.is_riichi { 
+        eval.yaku_names.push("Riichi".to_string()); 
+        eval.total_han += 1; 
+
+        if is_ippatsu { 
+        eval.yaku_names.push("Ippatsu".to_string()); 
+        eval.total_han += 1; 
+        }
+
+        if true {// turns since riichi = 0 {
+        eval.yaku_names.remove(eval.yaku_names.iter().position(|x| x == "Riichi").unwrap());
+        eval.yaku_names.push("Double Riichi".to_string()); 
+        eval.total_han += 1; 
+        }
+    }
+
+    if is_kan_replacement && is_tsumo { 
+        eval.yaku_names.push("Rinshan Kaihou".to_string()); 
+        eval.total_han += 1; 
+    }
+
+    if is_kan_replacement && !is_tsumo { 
+        eval.yaku_names.push("Chankan".to_string()); 
+        eval.total_han += 1; 
+    }
+
+    if haitei(game, is_tsumo) { 
+        eval.yaku_names.push("Haitei".to_string()); 
+        eval.total_han += 1; 
+    }
+    if houtei(game, is_tsumo) { 
+        eval.yaku_names.push("Houtei".to_string()); 
+        eval.total_han += 1; 
+    }
+
+    eval
+}
+
+
+
+
+
 fn start_game(mut commands: Commands) {
     let mut wall = vec![];
     for _ in 0..4 {
@@ -935,7 +1221,7 @@ fn start_game(mut commands: Commands) {
         Points(25000),
         SeatWind(Winds::East),
         Hand(vec![]),
-        OpenMelds(vec![]),
+        OpenMentsu(vec![]),
         Alive,
         ClosedHand,
         Oya,
