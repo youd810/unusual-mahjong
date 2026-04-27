@@ -4,8 +4,8 @@
 // !Kokushi Musou (Thirteen Orphans) done
 // !Suuankou (Four Concealed Triplets) done
 // !Daisangen (Big Three Dragons) done
-// !Shousuushii (Little Four Winds) done
-// !Daisuushii (Big Four Winds) done 
+// !Shousuushii (Little Four Wind) done
+// !Daisuushii (Big Four Wind) done 
 // !Tsuuiisou (All Honors) done
 // !Chinroutou (All Terminals) done
 // !Ryuuiisou (All Green) done
@@ -38,7 +38,7 @@
 // *1 Han
 // !Tanyao (All Simples) done
 // !Iipeikou (One Set of Identical Sequences) done
-// !Yakuhai / Fanpai (Value Tiles — seat wind, round wind, dragons) done
+// !Yakuhai / Fanpai (Value Tiles — seat Wind, round Wind, dragons) done
 // !Riichi done
 // Ippatsu
 // Menzen Tsumo (Self-draw win with closed hand)
@@ -78,6 +78,7 @@ enum Honor {
     South,
 }
 
+// TODO: test and change to array later 
 #[derive(PartialEq, Eq, Clone, PartialOrd, Ord)]
 enum Mentsu {
     Jantou(Vec<Tile>),
@@ -88,7 +89,7 @@ enum Mentsu {
     Shouminkan(Vec<Tile>),
 }
 
-enum Winds {
+enum Wind {
     East,
     South,
     West,
@@ -107,7 +108,7 @@ enum ChiTilePos { // tile drawn/discarded
 struct GameState {
     rounds: u8,
     turns: u8,
-    bakaze: Winds,
+    bakaze: Wind,
     bullet: u8,
 }
 
@@ -119,7 +120,7 @@ struct Wall(Vec<Tile>);
 struct PlayerTag;
 
 #[derive(Component)]
-struct SeatWind(Winds);
+struct Jikaze(Wind);
 
 #[derive(Component)]
 struct Points(i32);
@@ -138,7 +139,7 @@ struct Oya;
 struct ClosedHand;
 
 #[derive(Component)]
-struct Tenpai;
+struct Tenpai(Vec<Tile>);
 
 #[derive(Component)]
 struct Riichi {
@@ -147,6 +148,17 @@ struct Riichi {
 
 #[derive(Component)]
 struct Alive;
+
+#[derive(Component)]
+struct Kawa(Vec<Tile>);
+
+#[derive(Component)]
+struct DiscardedTile(Tile);
+
+#[derive(Component)]
+struct DiscardedBy(Entity);
+
+
 
 #[derive(Message)]
 struct DeclarePonMessage {
@@ -184,7 +196,7 @@ struct Player {
     drawn: Option<Tile>,
     
     open_mentsu: Vec<Mentsu>,
-    jikaze: Winds,
+    jikaze: Wind,
     is_tenpai: bool,
     is_hand_closed: bool,
     is_riichi: bool,
@@ -201,27 +213,578 @@ struct Game {
     turns: u8,
     oya: Player,
     wall: Vec<Tile>,
-    bakaze: Winds,
+    bakaze: Wind,
     bullet: u8,
     player_discard: Option<Tile>,
 }
 
+fn check_ryuukoku(wall: &Wall) -> bool {
+    wall.0.len() <= 14 // dead wall
+}
+
+fn is_furiten(discard_pile: &Kawa, tenpai: &Tenpai) -> bool {
+    tenpai.0.iter().any(|wait| discard_pile.0.contains(wait))
+}
 
 
-fn tenpai(hand: &[Tile]) -> Vec<Tile> { // TODO: this should be raw hand + open mentsu
+
+fn evaluate_yaku(
+    results: &[Vec<Mentsu>],
+    raw_hand: &[Tile],
+    combined_hand: &[Tile],
+    open_mentsu: &[Mentsu],
+    is_hand_closed: bool,
+    is_oya: bool,
+    is_riichi: bool,
+    is_double_riichi: bool,
+    is_ippatsu: bool,
+    bakaze: &Wind,
+    jikaze: &Wind,
+    turns: u8,
+    winning_tile: &Tile,
+    is_tsumo: bool,
+    is_rinshan: bool,
+    is_chankan: bool,
+    wall: &Wall,
+) -> HandResult {
+    let mut best = HandResult {
+        yaku_names: vec![],
+        total_han: 0,
+        total_fu: 0,
+        is_yakuman: false,
+    };
+
+    // path 1
+    if is_hand_closed && kokushi_musou(raw_hand) {
+        let mut eval = HandResult {
+            yaku_names: vec!["Kokushi Musou".to_string()],
+            total_han: 0, total_fu: 0, is_yakuman: true,
+        };
+        add_situational_yakuman(&mut eval, turns, is_oya, is_tsumo);
+        return eval;
+    }
+
+    // 2
+    for result in results {
+        let eval = evaluate_standard(
+            result, combined_hand, open_mentsu,
+            is_hand_closed, is_oya, is_riichi, is_double_riichi,
+            is_ippatsu, bakaze, jikaze, turns, winning_tile,
+            is_tsumo, is_rinshan, is_chankan, wall,
+        );
+        if is_better(&eval, &best) { 
+            best = eval; 
+        }
+    }
+
+    // 3
+    if is_hand_closed && chiitoitsu(raw_hand) {
+        let eval = evaluate_chiitoitsu(
+            raw_hand, is_riichi, is_double_riichi, is_ippatsu,
+            is_tsumo, is_chankan, is_oya, turns, wall,
+        );
+        if is_better(&eval, &best) { 
+            best = eval; 
+        }
+    }
+
+    best
+}
+
+
+fn evaluate_standard(
+    result: &[Mentsu],
+    combined_hand: &[Tile],
+    open_mentsu: &[Mentsu],
+    is_hand_closed: bool,
+    is_oya: bool,
+    is_riichi: bool,
+    is_double_riichi: bool,
+    is_ippatsu: bool,
+    bakaze: &Wind,
+    jikaze: &Wind,
+    turns: u8,
+    winning_tile: &Tile,
+    is_tsumo: bool,
+    is_rinshan: bool,
+    is_chankan: bool,
+    wall: &Wall,
+) -> HandResult {
+    let mut eval = HandResult {
+        yaku_names: vec![],
+        total_han: 0, total_fu: 0, is_yakuman: false,
+    };
+
+
+    // yakuman
+    if is_hand_closed && chuuren_poutou(combined_hand) {
+        eval.yaku_names.push("Chuuren Poutou".to_string());
+        eval.is_yakuman = true;
+    }
+
+    if suuankou(result) {
+        eval.yaku_names.push("Suuankou".to_string());
+        eval.is_yakuman = true;
+    }
+
+    if daisuushii(result) {
+        eval.yaku_names.push("Daisuushii".to_string());
+        eval.is_yakuman = true;
+    }
+
+    if shousuushii(result) {
+        eval.yaku_names.push("Shousuushii".to_string());
+        eval.is_yakuman = true;
+    }
+
+    if daisangen(result) {
+        eval.yaku_names.push("Daisangen".to_string());
+        eval.is_yakuman = true;
+    }
+
+    if tsuuisou(combined_hand) {
+        eval.yaku_names.push("Tsuuiisou".to_string());
+        eval.is_yakuman = true;
+    }
+
+    if chinroutou(combined_hand) {
+        eval.yaku_names.push("Chinroutou".to_string());
+        eval.is_yakuman = true;
+    }
+
+    if ryuuiisou(combined_hand) {
+        eval.yaku_names.push("Ryuuiisou".to_string());
+        eval.is_yakuman = true;
+    }
+
+    if suukantsu(open_mentsu) {
+        eval.yaku_names.push("Suukantsu".to_string());
+        eval.is_yakuman = true;
+    }
+
+    add_situational_yakuman(&mut eval, turns, is_oya, is_tsumo);
+
+    if eval.is_yakuman {
+        return eval;
+    }
+
+    // upgradable yaku
+    if chinitsu(combined_hand) {
+        eval.yaku_names.push("Chinitsu".to_string());
+        eval.total_han += if is_hand_closed { 6 } else { 5 };
+    } else if honitsu(combined_hand) {
+        eval.yaku_names.push("Honitsu".to_string());
+        eval.total_han += if is_hand_closed { 3 } else { 2 };
+    }
+
+    if junchan(result) {
+        eval.yaku_names.push("Junchan".to_string());
+        eval.total_han += if is_hand_closed { 3 } else { 2 };
+    } else if chanta(result) {
+        eval.yaku_names.push("Chanta".to_string());
+        eval.total_han += if is_hand_closed { 2 } else { 1 };
+    }
+
+    if is_hand_closed {
+        if ryanpeikou(result) {
+            eval.yaku_names.push("Ryanpeikou".to_string());
+            eval.total_han += 3;
+        } else if iipeikou(result) {
+            eval.yaku_names.push("Iipeikou".to_string());
+            eval.total_han += 1;
+        }
+    }
+
+    // kuitan
+    if tanyao(combined_hand) {
+        eval.yaku_names.push("Tanyao".to_string());
+        eval.total_han += 1;
+    }
+
+    if ittsuu(result) {
+        eval.yaku_names.push("Ittsuu".to_string());
+        eval.total_han += if is_hand_closed { 2 } else { 1 };
+    }
+
+    if sanshoku_doujun(result) {
+        eval.yaku_names.push("Sanshoku Doujun".to_string());
+        eval.total_han += if is_hand_closed { 2 } else { 1 };
+    }
+
+    if sanshoku_doukou(result) {
+        eval.yaku_names.push("Sanshoku Doukou".to_string());
+        eval.total_han += 2;
+    }
+
+    if toitoi(result) {
+        eval.yaku_names.push("Toitoi".to_string());
+        eval.total_han += 2;
+    }
+
+    if sanankou(result) {
+        eval.yaku_names.push("Sanankou".to_string());
+        eval.total_han += 2;
+    }
+
+    if shousangen(result) {
+        eval.yaku_names.push("Shousangen".to_string());
+        eval.total_han += 2;
+    }
+
+    if honroutou(combined_hand) {
+        eval.yaku_names.push("Honroutou".to_string());
+        eval.total_han += 2;
+    }
+
+    if sankantsu(open_mentsu) {
+        eval.yaku_names.push("Sankantsu".to_string());
+        eval.total_han += 2;
+    }
+
+    if is_hand_closed && pinfu(result, winning_tile, jikaze, bakaze) {
+        eval.yaku_names.push("Pinfu".to_string());
+        eval.total_han += 1;
+    }
+
+    let yakuhai = yakuhai(result, jikaze, bakaze);
+    if yakuhai > 0 {
+        eval.yaku_names.push(format!("Yakuhai ({} sets)", yakuhai));
+        eval.total_han += yakuhai;
+    }
+
+    // --- Situational ---
+    add_situational(&mut eval, is_hand_closed, is_riichi, is_double_riichi,
+        is_ippatsu, is_tsumo, is_rinshan, is_chankan, wall);
+
+    eval
+}
+
+
+fn evaluate_chiitoitsu(
+    raw_hand: &[Tile],
+    is_riichi: bool,
+    is_double_riichi: bool,
+    is_ippatsu: bool,
+    is_tsumo: bool,
+    is_chankan: bool,
+    is_oya: bool,
+    turns: u8,
+    wall: &Wall,
+) -> HandResult {
+    let mut eval = HandResult {
+        yaku_names: vec!["Chiitoitsu".to_string()],
+        total_han: 2,
+        total_fu: 25, // always fixed
+        is_yakuman: false,
+    };
+
+    // yakuman
+    if tsuuisou(raw_hand) {
+        eval.yaku_names.clear();
+        eval.yaku_names.push("Tsuuiisou".to_string());
+        eval.is_yakuman = true;
+        add_situational_yakuman(&mut eval, turns, is_oya, is_tsumo);
+        return eval;
+    }
+
+    // compatible yaku only
+    if tanyao(raw_hand) {
+        eval.yaku_names.push("Tanyao".to_string());
+        eval.total_han += 1;
+    }
+
+    if chinitsu(raw_hand) {
+        eval.yaku_names.push("Chinitsu".to_string());
+        eval.total_han += 6;
+    } else if honitsu(raw_hand) {
+        eval.yaku_names.push("Honitsu".to_string());
+        eval.total_han += 3;
+    }
+
+    if honroutou(raw_hand) {
+        eval.yaku_names.push("Honroutou".to_string());
+        eval.total_han += 2;
+    }
+
+    // chiitoitsu is always closed, rinshan impossible (no kan)
+    add_situational(&mut eval, true, is_riichi, is_double_riichi,
+        is_ippatsu, is_tsumo, false, is_chankan, wall);
+
+    eval
+}
+
+
+fn add_situational_yakuman(eval: &mut HandResult, turns: u8, is_oya: bool, is_tsumo: bool) {
+    
+    if tenhou(turns, is_oya, is_tsumo) {
+        eval.yaku_names.push("Tenhou".to_string());
+    }
+
+    if chiihou(turns, is_oya, is_tsumo) {
+        eval.yaku_names.push("Chiihou".to_string());
+    }
+
+}
+
+
+fn add_situational(
+    eval: &mut HandResult,
+    is_hand_closed: bool,
+    is_riichi: bool,
+    is_double_riichi: bool,
+    is_ippatsu: bool,
+    is_tsumo: bool,
+    is_rinshan: bool,
+    is_chankan: bool,
+    wall: &Wall,
+) {
+
+    if is_hand_closed && is_tsumo {
+        eval.yaku_names.push("Menzen Tsumo".to_string());
+        eval.total_han += 1;
+    }
+
+    if is_double_riichi {
+        eval.yaku_names.push("Double Riichi".to_string());
+        eval.total_han += 2;
+    } else if is_riichi {
+        eval.yaku_names.push("Riichi".to_string());
+        eval.total_han += 1;
+    }
+
+    if is_riichi && is_ippatsu {
+        eval.yaku_names.push("Ippatsu".to_string());
+        eval.total_han += 1;
+    }
+
+    if is_rinshan && is_tsumo {
+        eval.yaku_names.push("Rinshan Kaihou".to_string());
+        eval.total_han += 1;
+    }
+
+    if is_chankan && !is_tsumo {
+        eval.yaku_names.push("Chankan".to_string());
+        eval.total_han += 1;
+    }
+
+    if haitei(wall, is_tsumo) {
+        eval.yaku_names.push("Haitei".to_string());
+        eval.total_han += 1;
+    }
+
+    if houtei(wall, is_tsumo) {
+        eval.yaku_names.push("Houtei".to_string());
+        eval.total_han += 1;
+    }
+
+}
+
+
+fn is_better(new: &HandResult, old: &HandResult) -> bool {
+    if new.is_yakuman && !old.is_yakuman { return true; }
+    if !new.is_yakuman && old.is_yakuman { return false; }
+    if new.is_yakuman && old.is_yakuman {
+        return new.yaku_names.len() > old.yaku_names.len();
+    }
+    if new.total_han != old.total_han {
+        return new.total_han > old.total_han;
+    }
+    new.total_fu > old.total_fu
+}
+
+
+// call on opponent discard
+fn can_declare_ron(
+    discard_tile: &Tile,
+    hand: &[Tile],
+    open_mentsu: &[Mentsu],
+    tenpai: &Tenpai,
+    discard_pile: &Kawa,
+    is_hand_closed: bool,
+    is_oya: bool,
+    is_riichi: bool,
+    is_ippatsu: bool,
+    bakaze: &Wind,
+    jikaze: &Wind,
+) -> bool {
+    if !tenpai.0.contains(discard_tile) || is_furiten(discard_pile, tenpai) {
+        return false;
+    }
+
+    let mut combined_hand = hand.to_owned();
+    combined_hand.push(*discard_tile);
+    let results = decompose(&combined_hand);
+
+    result: &[Mentsu],
+    raw_hand: &[Tile],
+    combined_hand: &[Tile],
+    open_mentsu: &[Mentsu],
+    is_hand_closed: bool,
+    is_oya: bool,
+    is_riichi: bool,
+    is_ippatsu: bool,
+    bakaze: &Wind,
+    jikaze: &Wind,
+    winning_tile: &Tile,
+    is_tsumo: bool,
+    is_kan_replacement: bool,
+
+
+    // yaku validation
+    if !evaluate_yaku(
+        &results,
+        &hand,
+        &combined_hand, 
+        open_mentsu,
+        is_hand_closed, 
+        is_oya, 
+        is_riichi, 
+        is_ippatsu, 
+        bakaze, 
+        jikaze, 
+        discard_tile).yaku_names.is_empty() {
+        true
+    } else {
+        false
+    }
+
+}
+
+
+fn declare_ron(
+    query: Query<(Entity, &Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, Has<ClosedHand>, Has<Oya>, Has<Riichi>)>,
+    game: Res<GameState>,
+    // discard event/resource
+) {
+    for (entity, hand, open, tenpai, kawa, seat, is_closed, is_oya, is_riichi) in &query {
+        if can_declare_ron(
+            &discard_tile,
+            &hand.0, 
+            &open.0, 
+            tenpai, 
+            kawa,
+            is_closed, 
+            is_oya, 
+            is_riichi, 
+            false,
+            &game.bakaze, 
+            &seat.0,
+        ) {
+            // player can ron
+        }
+    }
+}
+
+
+// call on self draw
+fn can_declare_tsumo(
+    drawn_tile: &Tile,
+    hand: &[Tile],
+    open_mentsu: &[Mentsu],
+    tenpai: &Tenpai,
+    discard_pile: &Kawa,
+    is_closed: bool,
+    is_oya: bool,
+    is_riichi: bool,
+    is_ippatsu: bool,
+    bakaze: &Wind,
+    jikaze: &Wind,
+) -> bool {
+    if !tenpai.0.contains(drawn_tile)  {
+        return false;
+    }
+
+    let mut combined_hand = hand.to_owned();
+    combined_hand.push(*drawn_tile);
+    let results = decompose(&combined_hand);
+
+    if !evaluate_yaku(
+        &results, 
+        &combined_hand, 
+        player, 
+        game, 
+        drawn_tile, 
+        is_tsumo, 
+        is_oya, 
+        is_kan_replacement, 
+        is_ippatsu).yaku_names.is_empty() {
+        true
+    } else {
+        false
+    }
+
+}
+
+
+fn declare_tsumo(
+    query: Query<(Entity, &Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, Has<ClosedHand>, Has<Oya>, Has<Riichi>)>,
+    game: Res<GameState>,
+    // discard event/resource
+) {
+    for (entity, hand, open, tenpai, kawa, seat, is_closed, is_oya, is_riichi) in &query {
+        if can_declare_tsumo(
+            &drawn_tile, 
+            &hand.0, 
+            &open.0, 
+            tenpai, 
+            kawa,
+            is_closed, 
+            is_oya, 
+            is_riichi, 
+            false,
+            &game.bakaze, 
+            &seat.0,
+        ) {
+            // player can ron
+        }
+    }
+}
+
+
+
+
+
+// raw hand nomi works as well, no need to combine with open mentsu!
+fn check_tenpai(raw_hand: &[Tile]) -> Vec<Tile> { 
     let mut waiting_on: Vec<Tile> = vec![];
     for tile in all_tiles() {
-        let mut hand_speculated = hand.to_owned();
+        let mut hand_speculated = raw_hand.to_owned();
         hand_speculated.push(tile);
-        if !decompose(&hand_speculated).is_empty() {
-            self.is_tenpai = true;
+         if !decompose(&hand_speculated).is_empty() {
             waiting_on.push(tile);
         }
     }
-    if waiting_on.is_empty() {
-        self.is_tenpai = false;
-    }
     waiting_on
+}
+
+fn set_tenpai(
+    query: Query<(Entity, &Hand)>,
+    mut commands: Commands,
+) {
+    for (entity, hand) in &query {
+        let waiting_on = check_tenpai(&hand.0);
+        if !waiting_on.is_empty() {
+            commands.entity(entity).insert(Tenpai(waiting_on));
+        } else {
+            commands.entity(entity).remove::<Tenpai>();
+        }
+    }
+}
+
+fn combine_tiles(hand: &Hand, open_mentsu: &OpenMentsu) -> Vec<Tile> {
+    let mut result = hand.0.clone();
+
+    for mentsu in &open_mentsu.0{
+        if let 
+            Mentsu::Koutsu(tiles, _) 
+                | Mentsu::Shuntsu(tiles, _) 
+                | Mentsu::Ankan(tiles) 
+                | Mentsu::Daiminkan(tiles) 
+                | Mentsu::Shouminkan(tiles) = mentsu {
+                result.extend(tiles)
+            }
+    };
+    result
 }
 
 fn tenpai_payout_system(mut query: Query<&mut Points, With<Tenpai>>) {
@@ -425,26 +988,11 @@ fn check_win(hand: &[Tile], player: &Player) -> Option<Vec<Vec<Mentsu>>> {
     }
 }
 
-fn combine_tiles(player: &Player) -> Vec<Tile> {
-    let mut result = player.hand.clone();
 
-    for mentsu in &player.open_mentsu {
-        if let 
-            Mentsu::Koutsu(tiles, _) 
-                | Mentsu::Shuntsu(tiles, _) 
-                | Mentsu::Ankan(tiles) 
-                | Mentsu::Daiminkan(tiles) 
-                | Mentsu::Shouminkan(tiles) = mentsu {
-                result.extend(tiles)
-            }
-    };
-    result
-}
 
 
 
 fn tanyao(hand: &[Tile]) -> bool {
-    // add is_closed cond
     hand.iter().all(|x| !is_yaochuuhai(x))    
 }
 
@@ -471,26 +1019,23 @@ fn tsuuisou(hand: &[Tile]) -> bool {
 }
 
 
-fn iipeikou(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        let shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, true))).collect();
- 
-        for i in 0..shuntsu.len() {
-            for j in i+1..shuntsu.len() {
-                if shuntsu[i] == shuntsu[j] {
-                    return true;
-                }
+fn iipeikou(result: &[Mentsu]) -> bool {
+    let shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, true))).collect();
+
+    for i in 0..shuntsu.len() {
+        for j in i+1..shuntsu.len() {
+            if shuntsu[i] == shuntsu[j] {
+                return true;
             }
         }
-        // for any()
-        false
-    })
+    }
+    // for any()
+    false
 }
 
 
-fn ryanpeikou(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        let mut shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, true))).collect();
+fn ryanpeikou(result: &[Mentsu]) -> bool {
+            let mut shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, true))).collect();
 
         if shuntsu.len() == 4 {
             shuntsu.sort();
@@ -499,125 +1044,115 @@ fn ryanpeikou(results: &[Vec<Mentsu>]) -> bool {
             }
         }
         false
-    })
 }
 
 
-fn wind_to_honor(wind: &Winds) -> Honor {
+fn wind_to_honor(wind: &Wind) -> Honor {
     match wind {
-        Winds::East => Honor::East,
-        Winds::South => Honor::South,
-        Winds::West => Honor::West,
-        Winds::North => Honor::North,
+        Wind::East => Honor::East,
+        Wind::South => Honor::South,
+        Wind::West => Honor::West,
+        Wind::North => Honor::North,
     }
 }
 
 
-fn yakuhai(player: &Player, results: &[Vec<Mentsu>], bakaze: &Winds) -> u8 {
-    results.iter().map(|result| {
-        result.iter().filter_map(|mentsu| {
-            if let 
-                Mentsu::Koutsu(tiles, _)  
-                    | Mentsu::Ankan(tiles)  
-                    | Mentsu::Daiminkan(tiles)
-                    | Mentsu::Shouminkan(tiles) = mentsu {
-                match &tiles[0] {
-                    // ! consider changing this to | operator
-                    Tile::Honor(Honor::Red) => Some(1),
-                    Tile::Honor(Honor::Green) => Some(1),
-                    Tile::Honor(Honor::White) => Some(1),
-                    Tile::Honor(h) if *h == wind_to_honor(&player.jikaze) => Some(1),
-                    Tile::Honor(h) if *h == wind_to_honor(bakaze) => Some(1),
-                    _ => None,
-                }
-            } else {
-                None
+fn yakuhai(result: &[Mentsu], jikaze: &Wind, bakaze: &Wind) -> u8 {
+    result.iter().map(|mentsu| {
+        if let
+            Mentsu::Koutsu(tiles, _)
+                | Mentsu::Ankan(tiles)
+                | Mentsu::Daiminkan(tiles)
+                | Mentsu::Shouminkan(tiles) = mentsu
+        {
+            let tile = &tiles[0];
+            let mut count = 0 as u8;
+            match tile {
+                Tile::Honor(Honor::Red | Honor::Green | Honor::White) => count += 1,
+                _ => {}
             }
-        }).sum::<u8>()
-    }).max().unwrap_or(0)
+            if let Tile::Honor(h) = tile {
+                if *h == wind_to_honor(jikaze) { 
+                    count += 1; 
+                }
+                if *h == wind_to_honor(bakaze) { 
+                    count += 1; 
+                }
+            }
+            count
+        } else {
+            0
+        }
+    }).sum()
 }
 
 
-fn sanankou(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        result
-            .iter()
-            .filter(|mentsu| 
-                matches!(mentsu, Mentsu::Koutsu(_, true) | Mentsu::Ankan(_)))
-            .count() == 3
-    })
+fn sanankou(result: &[Mentsu]) -> bool {
+    result
+        .iter()
+        .filter(|mentsu| 
+            matches!(mentsu, Mentsu::Koutsu(_, true) | Mentsu::Ankan(_)))
+        .count() == 3
 }
 
 
-fn suuankou(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        result
-            .iter()
-            .filter(|mentsu| 
-                matches!(mentsu, Mentsu::Koutsu(_, true) | Mentsu::Ankan(_)))
-            .count() == 4 
-    })
+fn suuankou(result: &[Mentsu]) -> bool {
+    result
+        .iter()
+        .filter(|mentsu| 
+            matches!(mentsu, Mentsu::Koutsu(_, true) | Mentsu::Ankan(_)))
+        .count() == 4 
 }
 
 
-fn toitoi(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        result
-            .iter()
-            .filter(|mentsu| 
-                matches!(mentsu, Mentsu::Koutsu(_, _) | Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_)))
-            .count() == 4 
-    })
+fn toitoi(result: &[Mentsu]) -> bool {
+    result
+        .iter()
+        .filter(|mentsu| 
+            matches!(mentsu, Mentsu::Koutsu(_, _) | Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_)))
+        .count() == 4 
 }
 
 
-fn daisangen(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        has_koutsu_or_kan(result, Tile::Honor(Honor::Red))
-            && has_koutsu_or_kan(result, Tile::Honor(Honor::Green)) 
-            && has_koutsu_or_kan(result, Tile::Honor(Honor::White))
-    })
+fn daisangen(result: &[Mentsu]) -> bool {
+    has_koutsu_or_kan(result, Tile::Honor(Honor::Red))
+        && has_koutsu_or_kan(result, Tile::Honor(Honor::Green)) 
+        && has_koutsu_or_kan(result, Tile::Honor(Honor::White))
 }
 
 
-fn shousangen(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        let dragon_kou_or_kan = has_koutsu_or_kan(result, Tile::Honor(Honor::Red)) as u8
-            + has_koutsu_or_kan(result, Tile::Honor(Honor::Green)) as u8
-            + has_koutsu_or_kan(result, Tile::Honor(Honor::White)) as u8;
-        
-        let dragon_jantou = has_jantou(result, Tile::Honor(Honor::Red)) as u8 
-            + has_jantou(result, Tile::Honor(Honor::Green)) as u8 
-            + has_jantou(result, Tile::Honor(Honor::White)) as u8;
-        
-        dragon_kou_or_kan == 2 && dragon_jantou == 1
-    })
+fn shousangen(result: &[Mentsu]) -> bool {
+    let dragon_kou_or_kan = has_koutsu_or_kan(result, Tile::Honor(Honor::Red)) as u8
+        + has_koutsu_or_kan(result, Tile::Honor(Honor::Green)) as u8
+        + has_koutsu_or_kan(result, Tile::Honor(Honor::White)) as u8;
+
+    let dragon_jantou = has_jantou(result, Tile::Honor(Honor::Red)) as u8 
+        + has_jantou(result, Tile::Honor(Honor::Green)) as u8 
+        + has_jantou(result, Tile::Honor(Honor::White)) as u8;
+
+    dragon_kou_or_kan == 2 && dragon_jantou == 1
 }
 
 
-fn daisuushii(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        has_koutsu_or_kan(result, Tile::Honor(Honor::East))
-            && has_koutsu_or_kan(result, Tile::Honor(Honor::South)) 
-            && has_koutsu_or_kan(result, Tile::Honor(Honor::West))
-            && has_koutsu_or_kan(result, Tile::Honor(Honor::North))
-    })
+fn daisuushii(result: &[Mentsu]) -> bool {
+    has_koutsu_or_kan(result, Tile::Honor(Honor::East))
+        && has_koutsu_or_kan(result, Tile::Honor(Honor::South)) 
+        && has_koutsu_or_kan(result, Tile::Honor(Honor::West))
+        && has_koutsu_or_kan(result, Tile::Honor(Honor::North))
 }
 
-fn shousuushii(results: &[Vec<Mentsu>]) -> bool {
- results.iter().any(|result| {
-        let wind_kou_or_kan = has_koutsu_or_kan(result, Tile::Honor(Honor::East)) as u8
-            + has_koutsu_or_kan(result, Tile::Honor(Honor::South)) as u8
-            + has_koutsu_or_kan(result, Tile::Honor(Honor::West)) as u8
-            + has_koutsu_or_kan(result, Tile::Honor(Honor::North)) as u8;
-        
-        let wind_jantou = has_jantou(result, Tile::Honor(Honor::East)) as u8 
-            + has_jantou(result, Tile::Honor(Honor::South)) as u8 
-            + has_jantou(result, Tile::Honor(Honor::West)) as u8 
-            + has_jantou(result, Tile::Honor(Honor::North)) as u8;
-        
+fn shousuushii(result: &[Mentsu]) -> bool {
+    let wind_kou_or_kan = has_koutsu_or_kan(result, Tile::Honor(Honor::East)) as u8
+        + has_koutsu_or_kan(result, Tile::Honor(Honor::South)) as u8
+        + has_koutsu_or_kan(result, Tile::Honor(Honor::West)) as u8
+        + has_koutsu_or_kan(result, Tile::Honor(Honor::North)) as u8;
+    
+    let wind_jantou = has_jantou(result, Tile::Honor(Honor::East)) as u8 
+        + has_jantou(result, Tile::Honor(Honor::South)) as u8 
+        + has_jantou(result, Tile::Honor(Honor::West)) as u8 
+        + has_jantou(result, Tile::Honor(Honor::North)) as u8;
+    
         wind_kou_or_kan == 3 && wind_jantou == 1
-    })
 }
 
 
@@ -635,54 +1170,50 @@ fn honitsu(hand: &[Tile]) -> bool {
 }
 
 
-fn chanta(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        result.iter().all(|mentsu| {
-            match mentsu {
-                Mentsu::Shuntsu(tiles, _) => {
-                    is_terminal(&tiles[0]) || is_terminal(&tiles[2])
-                }
-                Mentsu::Koutsu(tiles, _)  
-                    | Mentsu::Jantou(tiles) 
-                    | Mentsu::Ankan(tiles)  
-                    | Mentsu::Daiminkan(tiles) 
-                    | Mentsu::Shouminkan(tiles)  => {
-                    is_yaochuuhai(&tiles[0])
-                }
+fn chanta(result: &[Mentsu]) -> bool {
+    result.iter().all(|mentsu| {
+        match mentsu {
+            Mentsu::Shuntsu(tiles, _) => {
+                is_terminal(&tiles[0]) || is_terminal(&tiles[2])
             }
-        })
+            Mentsu::Koutsu(tiles, _)  
+                | Mentsu::Jantou(tiles) 
+                | Mentsu::Ankan(tiles)  
+                | Mentsu::Daiminkan(tiles) 
+                | Mentsu::Shouminkan(tiles)  => {
+                is_yaochuuhai(&tiles[0])
+            }
+        }
     })
 }
 
 
-fn junchan(results: &[Vec<Mentsu>]) -> bool {
-     results.iter().any(|result| {
-        result.iter().all(|mentsu| {
-            match mentsu {
-                Mentsu::Shuntsu(tiles, _) => {
-                    is_terminal(&tiles[0]) || is_terminal(&tiles[2])
-                }
-                Mentsu::Koutsu(tiles, _)  
-                    | Mentsu::Jantou(tiles) 
-                    | Mentsu::Ankan(tiles)  
-                    | Mentsu::Daiminkan(tiles) 
-                    | Mentsu::Shouminkan(tiles)  => {
-                    is_terminal(&tiles[0])
-                }
+fn junchan(result: &[Mentsu]) -> bool {
+    result.iter().all(|mentsu| {
+        match mentsu {
+            Mentsu::Shuntsu(tiles, _) => {
+                is_terminal(&tiles[0]) || is_terminal(&tiles[2])
             }
-        })
+            Mentsu::Koutsu(tiles, _)  
+                | Mentsu::Jantou(tiles) 
+                | Mentsu::Ankan(tiles)  
+                | Mentsu::Daiminkan(tiles) 
+                | Mentsu::Shouminkan(tiles)  => {
+                is_terminal(&tiles[0])
+            }
+        }
     })
 }
 
 
-fn sankantsu(player: &Player) -> bool {
-    player.open_mentsu.iter().filter(|mentsu|
+fn sankantsu(open_mentsu: &[Mentsu]) -> bool {
+    open_mentsu.iter().filter(|mentsu|
         matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_))).count() == 3 
 }
 
 
-fn suukantsu(player: &Player) -> bool {
-    player.open_mentsu.iter().filter(|mentsu|
+fn suukantsu(open_mentsu: &[Mentsu]) -> bool {
+    open_mentsu.iter().filter(|mentsu|
         matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_))).count() == 4 
 }
 
@@ -721,36 +1252,32 @@ fn has_shuntsu(result: &[Mentsu], first_tile: Tile) -> bool {
 }
 
 
-fn ittsuu(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        let man: bool = has_shuntsu(result, Tile::Man(1))
-            && has_shuntsu(result, Tile::Man(4))
-            && has_shuntsu(result, Tile::Man(7));
-        let pin: bool = has_shuntsu(result, Tile::Pin(1))
-            && has_shuntsu(result, Tile::Pin(4)) 
-            && has_shuntsu(result, Tile::Pin(7));
-        let sou: bool = has_shuntsu(result, Tile::Sou(1)) 
-            && has_shuntsu(result, Tile::Sou(4)) 
-            && has_shuntsu(result, Tile::Sou(7));
+fn ittsuu(result: &[Mentsu]) -> bool {
+    let man: bool = has_shuntsu(result, Tile::Man(1))
+        && has_shuntsu(result, Tile::Man(4))
+        && has_shuntsu(result, Tile::Man(7));
+    let pin: bool = has_shuntsu(result, Tile::Pin(1))
+        && has_shuntsu(result, Tile::Pin(4)) 
+        && has_shuntsu(result, Tile::Pin(7));
+    let sou: bool = has_shuntsu(result, Tile::Sou(1)) 
+        && has_shuntsu(result, Tile::Sou(4)) 
+        && has_shuntsu(result, Tile::Sou(7));
 
-        man || pin || sou
-    })
+    man || pin || sou
 }
 
 
-fn sanshoku_doujun(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        for i in 1..=7 {
-            let num_match = has_shuntsu(result, Tile::Man(i))
-                && has_shuntsu(result, Tile::Pin(i))
-                && has_shuntsu(result, Tile::Sou(i));
+fn sanshoku_doujun(result: &[Mentsu]) -> bool {
+    for i in 1..=7 {
+        let num_match = has_shuntsu(result, Tile::Man(i))
+            && has_shuntsu(result, Tile::Pin(i))
+            && has_shuntsu(result, Tile::Sou(i));
 
-            if num_match {
-                return true;
-            }
-        } 
-        false
-    })
+        if num_match {
+            return true;
+        }
+    } 
+    false
 }
 
 
@@ -778,19 +1305,17 @@ fn has_jantou(result: &[Mentsu], target_tile: Tile) -> bool {
 }
 
 
-fn sanshoku_doukou(results: &[Vec<Mentsu>]) -> bool {
-    results.iter().any(|result| {
-        for i in 1..=9 {
-            let color_match =  has_koutsu_or_kan(result, Tile::Man(i))
-                && has_koutsu_or_kan(result, Tile::Pin(i))
-                && has_koutsu_or_kan(result, Tile::Sou(i));
-            
-            if color_match {
-                return true;
-            }
+fn sanshoku_doukou(result: &[Mentsu]) -> bool {
+    for i in 1..=9 {
+        let color_match =  has_koutsu_or_kan(result, Tile::Man(i))
+            && has_koutsu_or_kan(result, Tile::Pin(i))
+            && has_koutsu_or_kan(result, Tile::Sou(i));
+        
+        if color_match {
+            return true;
         }
-        false
-    })
+    }
+    false
 }
 
 
@@ -824,37 +1349,32 @@ fn is_ryanmen_wait(shuntsu_tiles: &[Tile], winning_tile: &Tile) -> bool {
 }
 
 
-fn pinfu(player: &Player, game: &Game, results: &[Vec<Mentsu>], winning_tile: &Tile) -> bool {
-    if !player.is_hand_closed {
-        return false;
-    }
-    results.iter().any(|result| {
-        let mut shuntsu_count = 0;
-        let mut has_ryanmen = false;
-        let mut has_valid_jantou = false;
+fn pinfu(result: &[Mentsu], winning_tile: &Tile, jikaze: &Wind, bakaze: &Wind) -> bool {
+    let mut shuntsu_count = 0;
+    let mut has_ryanmen = false;
+    let mut has_valid_jantou = false;
 
-        for mentsu in result {
-            
-            match mentsu {
-                Mentsu::Shuntsu(tiles, true) => {
-                    shuntsu_count += 1;
-                    if is_ryanmen_wait(tiles, winning_tile) {
-                        has_ryanmen = true;
-                    }
+    for mentsu in result {
+        
+        match mentsu {
+            Mentsu::Shuntsu(tiles, true) => {
+                shuntsu_count += 1;
+                if is_ryanmen_wait(tiles, winning_tile) {
+                    has_ryanmen = true;
                 }
-                Mentsu::Jantou(tiles) => {
-                    has_valid_jantou = match tiles[0] {
-                        Tile::Honor(Honor::Red | Honor::Green | Honor::White) => false,
-                        Tile::Honor(h) if h == wind_to_honor(&player.jikaze) => false,
-                        Tile::Honor(h) if h == wind_to_honor(&game.bakaze) => false,
-                        _ => true,
-                    };
-                }
-                _ => {}
             }
+            Mentsu::Jantou(tiles) => {
+                has_valid_jantou = match tiles[0] {
+                    Tile::Honor(Honor::Red | Honor::Green | Honor::White) => false,
+                    Tile::Honor(h) if h == wind_to_honor(jikaze) => false,
+                    Tile::Honor(h) if h == wind_to_honor(bakaze) => false,
+                    _ => true,
+                };
+            }
+            _ => {}
         }
-        shuntsu_count == 4 && has_ryanmen && has_valid_jantou
-    })
+    }
+    shuntsu_count == 4 && has_ryanmen && has_valid_jantou
 }
 
 
@@ -866,12 +1386,12 @@ fn houtei(wall: &Wall, is_tsumo: bool) -> bool {
     wall.0.len() == 14 && !is_tsumo
 }
 
-fn tenhou(game: &GameState, is_oya: bool, is_tsumo: bool) -> bool {
-    game.turns == 0 && is_oya && is_tsumo
+fn tenhou(turns: u8, is_oya: bool, is_tsumo: bool) -> bool {
+    turns == 0 && is_oya && is_tsumo
 } 
 
-fn chiihou(game: &GameState, is_oya: bool, is_tsumo: bool) -> bool {
-    game.turns == 0 && !is_oya && is_tsumo
+fn chiihou(turns: u8, is_oya: bool, is_tsumo: bool) -> bool {
+    turns == 0 && !is_oya && is_tsumo
 } 
 
 
@@ -989,221 +1509,10 @@ fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<Vec<M
 
 
 
-fn evaluate_yaku(
-    // !add raw hand also
-    results: &[Vec<Mentsu>],             
-    combined_hand: &[Tile],        
-    player: &Player,
-    game: &GameState,
-    winning_tile: &Tile,
-    is_tsumo: bool,
-    is_oya: bool,
-    is_kan_replacement: bool,
-    is_ippatsu: bool,
-) -> HandResult {
-    let mut eval = HandResult {
-        yaku_names: vec![],
-        total_han: 0,
-        total_fu: 0,
-        is_yakuman: false,
-    };
-
-    let closed = player.is_hand_closed;
 
 
-    // ! todo: chiitoitsu and kokushi (passing raw hand as arg)
-
-    // yakuman
-    if closed && chuuren_poutou(combined_hand) { 
-        eval.yaku_names.push("Chuuren Poutou".to_string()); 
-        eval.is_yakuman = true; 
-    }
-
-    if suuankou(results) { 
-        eval.yaku_names.push("Suuankou".to_string()); 
-        eval.is_yakuman = true; 
-    }
-
-    if daisuushii(results) { 
-        eval.yaku_names.push("Daisuushii".to_string()); 
-        eval.is_yakuman = true; 
-    }
-
-    if shousuushii(results) { 
-        eval.yaku_names.push("Shousuushii".to_string()); 
-        eval.is_yakuman = true; 
-    }
-
-    if daisangen(results) { 
-        eval.yaku_names.push("Daisangen".to_string()); 
-        eval.is_yakuman = true; 
-    }
-
-    if tsuuisou(combined_hand) { 
-        eval.yaku_names.push("Tsuuiisou".to_string()); 
-        eval.is_yakuman = true; 
-    }
-
-    if chinroutou(combined_hand) { 
-        eval.yaku_names.push("Chinroutou".to_string()); 
-        eval.is_yakuman = true; 
-    }
-
-    if ryuuiisou(combined_hand) {
-        eval.yaku_names.push("Ryuuiisou".to_string()); 
-        eval.is_yakuman = true; 
-    }
-
-    if suukantsu(player) { 
-        eval.yaku_names.push("Suukantsu".to_string()); 
-        eval.is_yakuman = true; 
-    }
-
-    if tenhou(game, is_oya, is_tsumo) { 
-        eval.yaku_names.push("Tenhou".to_string()); 
-        eval.is_yakuman = true; 
-    }
-    if chiihou(game, is_oya, is_tsumo) { 
-        eval.yaku_names.push("Chiihou".to_string()); 
-        eval.is_yakuman = true; 
-    }
-
-    if eval.is_yakuman {
-        return eval; 
-    }
 
 
-    // upgradable yaku
-    if chinitsu(combined_hand) {
-        eval.yaku_names.push("Chinitsu".to_string());
-        eval.total_han += if closed { 6 } else { 5 };
-    } else if honitsu(combined_hand) {
-        eval.yaku_names.push("Honitsu".to_string());
-        eval.total_han += if closed { 3 } else { 2 };
-    }
-
-    if junchan(results) {
-        eval.yaku_names.push("Junchan".to_string());
-        eval.total_han += if closed { 3 } else { 2 };
-    } else if chanta(results) { 
-        eval.yaku_names.push("Chanta".to_string());
-        eval.total_han += if closed { 2 } else { 1 };
-    }
-
-    if closed {
-        if ryanpeikou(results) {
-            eval.yaku_names.push("Ryanpeikou".to_string());
-            eval.total_han += 3;
-        } else if iipeikou(results) {
-            eval.yaku_names.push("Iipeikou".to_string());
-            eval.total_han += 1;
-        }
-    }
-
-
-    // common yaku 
-
-    // kuitan enjoyer
-    if tanyao(combined_hand) { 
-        eval.yaku_names.push("Tanyao".to_string()); 
-        eval.total_han += 1; 
-    }
-
-    if ittsuu(results) {
-        eval.yaku_names.push("Ittsuu".to_string());
-        eval.total_han += if closed { 2 } else { 1 };
-    }
-
-    if sanshoku_doujun(results) {
-        eval.yaku_names.push("Sanshoku Doujun".to_string());
-        eval.total_han += if closed { 2 } else { 1 };
-    }
-
-    if sanshoku_doukou(results) { 
-        eval.yaku_names.push("Sanshoku Doukou".to_string()); 
-        eval.total_han += 2; 
-    }
-
-    if toitoi(results) { 
-        eval.yaku_names.push("Toitoi".to_string()); 
-        eval.total_han += 2; 
-    }
-
-    if sanankou(results) { 
-        eval.yaku_names.push("Sanankou".to_string()); 
-        eval.total_han += 2; 
-    }
-
-    if shousangen(results) { 
-        eval.yaku_names.push("Shousangen".to_string()); 
-        eval.total_han += 2; 
-    }
-
-    if honroutou(combined_hand) { 
-        eval.yaku_names.push("Honroutou".to_string()); 
-        eval.total_han += 2; 
-    }
-
-    if sankantsu(player) { 
-        eval.yaku_names.push("Sankantsu".to_string()); 
-        eval.total_han += 2; 
-    }
-
-    if closed && pinfu(player, game, results, winning_tile) { 
-        eval.yaku_names.push("Pinfu".to_string()); 
-        eval.total_han += 1; 
-    }
-
-    let yakuhai_count = yakuhai(player, results, &game.bakaze);
-    if yakuhai_count > 0 {
-        eval.yaku_names.push(format!("Yakuhai ({} sets)", yakuhai_count));
-        eval.total_han += yakuhai_count;
-    }
-
-
-    // circumstantial
-    if closed && is_tsumo { 
-        eval.yaku_names.push("Menzen Tsumo".to_string()); 
-        eval.total_han += 1; 
-    }
-
-    if player.is_riichi { 
-        eval.yaku_names.push("Riichi".to_string()); 
-        eval.total_han += 1; 
-
-        if is_ippatsu { 
-        eval.yaku_names.push("Ippatsu".to_string()); 
-        eval.total_han += 1; 
-        }
-
-        if true {// turns since riichi = 0 {
-        eval.yaku_names.remove(eval.yaku_names.iter().position(|x| x == "Riichi").unwrap());
-        eval.yaku_names.push("Double Riichi".to_string()); 
-        eval.total_han += 1; 
-        }
-    }
-
-    if is_kan_replacement && is_tsumo { 
-        eval.yaku_names.push("Rinshan Kaihou".to_string()); 
-        eval.total_han += 1; 
-    }
-
-    if is_kan_replacement && !is_tsumo { 
-        eval.yaku_names.push("Chankan".to_string()); 
-        eval.total_han += 1; 
-    }
-
-    if haitei(game, is_tsumo) { 
-        eval.yaku_names.push("Haitei".to_string()); 
-        eval.total_han += 1; 
-    }
-    if houtei(game, is_tsumo) { 
-        eval.yaku_names.push("Houtei".to_string()); 
-        eval.total_han += 1; 
-    }
-
-    eval
-}
 
 
 
@@ -1219,24 +1528,30 @@ fn start_game(mut commands: Commands) {
     commands.spawn((
         PlayerTag, 
         Points(25000),
-        SeatWind(Winds::East),
+        Jikaze(Wind::East),
         Hand(vec![]),
         OpenMentsu(vec![]),
         Alive,
         ClosedHand,
         Oya,
     ));
+    commands.spawn((
+        DiscardedTile(),
+        DiscardedBy(),
+        DiscardTurn(0),
+    ));
     commands.insert_resource(
         GameState { 
             rounds: 0, 
             turns: 0, 
-            bakaze: Winds::East, 
+            bakaze: Wind::East, 
             bullet: 1,
         }
     );
     commands.insert_resource(
         Wall(wall)
-    )
+    );
+
 }
 
 
@@ -1249,11 +1564,11 @@ fn main() {
 
 
 
-
+    
     
     //let mut player1 = Player {
     //    points: 123,
-    //    jikaze: Winds::East,
+    //    jikaze: Wind::East,
     //    hand: vec![],
     //    drawn: Tile::Man(3),
     //    opponent_discard: Tile::Man(4),
@@ -1270,7 +1585,7 @@ fn main() {
     //    rounds: 3,
     //    turns: 1,
     //    wall: all_tiles(),
-    //    bakaze: Winds::East,
+    //    bakaze: Wind::East,
     //    bullet: 123,
     //};
 //
