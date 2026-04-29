@@ -91,6 +91,7 @@ enum Mentsu {
     Shouminkan(Vec<Tile>),
 }
 
+#[derive(PartialEq, Eq)]
 enum Wind {
     East,
     South,
@@ -183,7 +184,8 @@ struct DeclarePonMessage {
 struct DeclareChiMessage {
     player: Entity,       
     tile: Tile,           
-    pos: ChiTilePos,      
+    pos: ChiTilePos,  
+    discarded_by: Entity,    
 }
 
 #[derive(Message)]
@@ -630,6 +632,7 @@ fn is_better(new: &HandResult, old: &HandResult) -> bool {
 
 
 // call on opponent discard
+// こんな引数を見せられたら誰でも泣きたくなるんだよなぁ
 fn can_declare_ron(
     discard_tile: &Tile,
     hand: &[Tile],
@@ -652,15 +655,32 @@ fn can_declare_ron(
         return false;
     }
 
-    // !sort and combine open_mentsu here
     let mut combined_hand = hand.to_owned();
     combined_hand.push(*discard_tile);
-    let results = decompose(&combined_hand);
+    for mentsu in open_mentsu {
+        match mentsu {
+            Mentsu::Koutsu(tiles, _) | Mentsu::Shuntsu(tiles, _)
+            | Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles)
+            | Mentsu::Shouminkan(tiles) => combined_hand.extend(tiles),
+            _ => {}
+        }
+    }
+    combined_hand.sort();
+
+    let mut raw_hand_plus_win = hand.to_owned();
+    raw_hand_plus_win.push(*discard_tile);
+    raw_hand_plus_win.sort();
+    let mut results = decompose(&raw_hand_plus_win);
+    for result in &mut results {
+        for mentsu in open_mentsu {
+            result.push(mentsu.to_owned());
+        }
+    }
 
     // yaku validation
     !evaluate_yaku(
         &results,
-        hand,            // raw hand (before adding discard)
+        &raw_hand_plus_win,   // this shouldn't be raw hand only
         &combined_hand,      // combined hand
         open_mentsu,
         is_hand_closed,
@@ -692,8 +712,8 @@ fn declare_ron(
             is_closed, is_oya, maybe_riichi)) = query.get(message.player)
         {
             let is_riichi = maybe_riichi.is_some();
-            let is_double = maybe_riichi.map_or(false, |r| r.is_double);
-            let is_ippatsu = maybe_riichi.map_or(false, |r| r.is_ippatsu_alive);
+            let is_double = maybe_riichi.is_some_and(|r| r.is_double);
+            let is_ippatsu = maybe_riichi.is_some_and(|r| r.is_ippatsu_alive);
 
             if can_declare_ron(
                 &message.discard_tile,
@@ -743,16 +763,33 @@ fn can_declare_tsumo(
         return false;
     }
 
-    // !also sort and combine here
     let mut combined_hand = hand.to_owned();
     combined_hand.push(*drawn_tile);
-    let results = decompose(&combined_hand);
+    for mentsu in open_mentsu {
+        match mentsu {
+            Mentsu::Koutsu(tiles, _) | Mentsu::Shuntsu(tiles, _)
+            | Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles)
+            | Mentsu::Shouminkan(tiles) => combined_hand.extend(tiles),
+            _ => {}
+        }
+    }
+    combined_hand.sort();
+
+    let mut raw_hand_plus_win = hand.to_owned();
+    raw_hand_plus_win.push(*drawn_tile);
+    raw_hand_plus_win.sort();
+    let mut results = decompose(&raw_hand_plus_win);
+    for result in &mut results {
+        for mentsu in open_mentsu {
+            result.push(mentsu.to_owned());
+        }
+    }
 
     // yaku validation
     !evaluate_yaku(
         &results,
-        hand,            // raw hand (before adding drawn)
-        &combined_hand,      // combined hand
+        &raw_hand_plus_win,            
+        &combined_hand,      
         open_mentsu,
         is_hand_closed,
         is_oya,
@@ -783,8 +820,8 @@ fn declare_tsumo(
             is_closed, is_oya, maybe_riichi)) = query.get(message.player)
         {
             let is_riichi = maybe_riichi.is_some();
-            let is_double = maybe_riichi.map_or(false, |r| r.is_double);
-            let is_ippatsu = maybe_riichi.map_or(false, |r| r.is_ippatsu_alive);
+            let is_double = maybe_riichi.is_some_and(|r| r.is_double);
+            let is_ippatsu = maybe_riichi.is_some_and(|r| r.is_ippatsu_alive);
 
             if can_declare_tsumo(
                 &message.drawn_tile, 
@@ -808,9 +845,6 @@ fn declare_tsumo(
         }
     }
 }
-
-
-
 
 
 // raw hand nomi works as well, no need to combine with open mentsu!
@@ -880,8 +914,8 @@ fn declare_riichi(
     mut commands: Commands,
 ) {
     for message in messages.read() {
-        if let Ok((is_closed, is_riichi, hand, mut points)) = query.get_mut(message.player) { 
-            if can_declare_riichi(&hand.0, is_closed, is_riichi, points.0, &*wall) {
+        if let Ok((is_closed, is_riichi, hand, mut points)) = query.get_mut(message.player) 
+            && can_declare_riichi(&hand.0, is_closed, is_riichi, points.0, &*wall) {
                 let is_double = game.turns == 1 && !game.calls_made;
                 commands.entity(message.player).insert(Riichi { 
                     is_double, 
@@ -889,7 +923,6 @@ fn declare_riichi(
                     turns_since: 0 });
                 points.0 -= 1000;
             }
-        }
     }
 }
 
@@ -902,28 +935,37 @@ impl Hand {
     }
 }
 
+
 fn can_declare_pon(hand: &[Tile], tile: &Tile,) -> bool {
     hand.iter().filter(|x| **x == *tile).count() >= 2
 }
 
 fn declare_pon(
     mut messages: MessageReader<DeclarePonMessage>,
-    mut query: Query<(&mut Hand, &mut OpenMentsu)>,
+    mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&mut Riichi>)>,
+    mut game: ResMut<GameState>,
     mut commands: Commands,
 ) {
     for message in messages.read(){
-        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player){
-            if can_declare_pon(&hand.0 ,&message.tile) {
+        if let Ok((mut hand, mut open_mentsu, _)) = query.get_mut(message.player) 
+            && can_declare_pon(&hand.0 ,&message.tile) { 
                 open_mentsu.0.push(Mentsu::Koutsu(vec![message.tile; 3], false));
                 for _ in 0..2 {
                     let idx = hand.0.iter().position(|x| *x == message.tile).unwrap();
                     hand.0.remove(idx);
                 }
+                for (_, _, mut maybe_riichi) in query.iter_mut() {
+                    if let Some(riichi) = maybe_riichi.as_deref_mut() {
+                        riichi.is_ippatsu_alive = false;
+                    }
+                }
                 commands.entity(message.player).remove::<ClosedHand>();
-            }
+                game.calls_made = true;
         }
     }
+
 }
+
 
 fn can_declare_chi(hand: &[Tile], tile: &Tile) -> Vec<ChiTilePos> {
     let mut results = vec![];
@@ -949,51 +991,76 @@ fn can_declare_chi(hand: &[Tile], tile: &Tile) -> Vec<ChiTilePos> {
     results
 }
 
+
+fn is_kamicha(self_wind: &Wind, discard_wind: &Wind) -> bool {
+    matches!((self_wind, discard_wind), 
+    (Wind::South, Wind::East) 
+        | (Wind::West, Wind::South) 
+        | (Wind::North, Wind::West) 
+        | (Wind::East, Wind::North))
+}
+
 fn declare_chi(
     mut messages: MessageReader<DeclareChiMessage>,
-    mut query: Query<(&mut Hand, &mut OpenMentsu)>,
-    mut commands: Commands
+    mut query: Query<(&mut Hand, &mut OpenMentsu, &Jikaze, Option<&mut Riichi>)>,
+    mut game: ResMut<GameState>,
+    mut commands: Commands,
 ) {
     for message in messages.read() {
-        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player){
+        let is_valid = if let (
+            Ok((hand, _, self_jikaze, _)),
+            Ok((_, _, discard_jikaze, _))
+        ) = (
+            query.get(message.player),
+            query.get(message.discarded_by)
+        ) {
             let positions = can_declare_chi(&hand.0, &message.tile);
-            if !positions.is_empty() && positions.contains(&message.pos) {
-                let pos: &ChiTilePos = &message.pos; // let the player choose 
-                let tile = &message.tile;
+            !positions.is_empty()
+                && positions.contains(&message.pos)
+                && is_kamicha(&self_jikaze.0, &discard_jikaze.0)
+        } else {
+            false
+        };
 
-                match pos {
-                    ChiTilePos::Middle => {
-                        let next = next_tile_sequence(tile).unwrap();
-                        let prev = previous_tile_sequence(tile).unwrap();
-                        // use the variables as a pointer for removal first b4 moving the value 
-                        hand.remove_tile_from_hand(&next);
-                        hand.remove_tile_from_hand(&prev);
-                        open_mentsu.0.push(Mentsu::Shuntsu(vec![prev, *tile, next], false));
-                        commands.entity(message.player).remove::<ClosedHand>();
-                    },
-                    ChiTilePos::Left => {
-                        let next = next_tile_sequence(tile).unwrap();
-                        let next_next = next_tile_sequence(&next).unwrap();
-                        hand.remove_tile_from_hand(&next);
-                        hand.remove_tile_from_hand(&next_next);
-                        open_mentsu.0.push(Mentsu::Shuntsu(vec![*tile, next, next_next], false));
-                        commands.entity(message.player).remove::<ClosedHand>();
-                    },
-                    ChiTilePos::Right => {
-                        let prev = previous_tile_sequence(tile).unwrap();
-                        let prev_prev = previous_tile_sequence(&prev).unwrap();
-                        hand.remove_tile_from_hand(&prev);
-                        hand.remove_tile_from_hand(&prev_prev);
-                        open_mentsu.0.push(Mentsu::Shuntsu(vec![prev_prev, prev, *tile], false));
-                        commands.entity(message.player).remove::<ClosedHand>();
-                    },
+        if is_valid && let Ok((mut hand, mut open_mentsu, _, _))= query.get_mut(message.player) {
+            let pos: &ChiTilePos = &message.pos; // let the player choose 
+            let tile = &message.tile;
+
+            match pos {
+                ChiTilePos::Middle => {
+                    let next = next_tile_sequence(tile).unwrap();
+                    let prev = previous_tile_sequence(tile).unwrap();
+                    // use the variables as a pointer for removal first b4 moving the value 
+                    hand.remove_tile_from_hand(&next);
+                    hand.remove_tile_from_hand(&prev);
+                    open_mentsu.0.push(Mentsu::Shuntsu(vec![prev, *tile, next], false));                         
+                },
+                ChiTilePos::Left => {
+                    let next = next_tile_sequence(tile).unwrap();
+                    let next_next = next_tile_sequence(&next).unwrap();
+                    hand.remove_tile_from_hand(&next);
+                    hand.remove_tile_from_hand(&next_next);
+                    open_mentsu.0.push(Mentsu::Shuntsu(vec![*tile, next, next_next], false));
+                },
+                ChiTilePos::Right => {
+                    let prev = previous_tile_sequence(tile).unwrap();
+                    let prev_prev = previous_tile_sequence(&prev).unwrap();
+                    hand.remove_tile_from_hand(&prev);
+                    hand.remove_tile_from_hand(&prev_prev);
+                    open_mentsu.0.push(Mentsu::Shuntsu(vec![prev_prev, prev, *tile], false));
+                },
+            }
+            
+            commands.entity(message.player).remove::<ClosedHand>();
+            game.calls_made = true;
+            for (_, _, _, mut maybe_riichi) in query.iter_mut() {
+                if let Some(riichi) = maybe_riichi.as_deref_mut() {
+                    riichi.is_ippatsu_alive = false;
                 }
-
             }
         }
     }
 }
-
 
 fn can_declare_kan_from_hand(hand: &[Tile], tile: &Tile) -> u8 {
     hand.iter().filter(|x| *x == tile).count() as u8
@@ -1010,21 +1077,25 @@ fn can_declare_kan_from_pon(open_mentsu: &[Mentsu], tile: &Tile) -> bool{
 
 fn declare_kan(
     mut messages: MessageReader<DeclareKanMessage>,
-    mut query: Query<(&mut Hand, &mut OpenMentsu)>,
+    mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&mut Riichi>)>,
+    mut game: ResMut<GameState>,
     mut commands: Commands
 ) { 
     for message in messages.read() {
-        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player){
+        if let Ok((mut hand, mut open_mentsu, _)) = query.get_mut(message.player){
             let tile = &message.tile;
             let count = can_declare_kan_from_hand(&hand.0, tile);
+            let mut is_kan_successful = false;
             if message.is_discard && count == 3 {
                 open_mentsu.0.push(Mentsu::Daiminkan(vec![*tile; 4]));
                 hand.0.retain(|x| x != tile);
-                commands.entity(message.player).remove::<ClosedHand>();
+                commands.entity(message.player).remove::<ClosedHand>(); 
+                is_kan_successful = true;
             } 
             else if !message.is_discard && count == 4 {
                 open_mentsu.0.push(Mentsu::Ankan(vec![*tile; 4]));
                 hand.0.retain(|x| x != tile);
+                is_kan_successful = true;
             }  
             else if !message.is_discard { // this check should be enough hopefully
                 for mentsu in &mut open_mentsu.0 {
@@ -1032,8 +1103,18 @@ fn declare_kan(
                         // deref to mutate
                         *mentsu = Mentsu::Shouminkan(vec![*tile; 4]);
                         hand.0.retain(|x| x != tile);
+                        is_kan_successful = true;
                         break;
                     } 
+                }
+            }
+
+            if is_kan_successful {
+                game.calls_made = true;
+                for (_, _, mut maybe_riichi) in query.iter_mut() {
+                    if let Some(riichi) = maybe_riichi.as_deref_mut() {
+                        riichi.is_ippatsu_alive = false;
+                    }
                 }
             }
         }
@@ -1064,6 +1145,7 @@ fn ryuuiisou(hand: &[Tile]) -> bool {
 }
 
 
+// ! deprecated
 fn check_win(hand: &[Tile], player: &Player) -> Option<Vec<Vec<Mentsu>>> {
     let mut results = decompose(hand);
     if results.is_empty() {
@@ -1088,7 +1170,7 @@ fn tanyao(hand: &[Tile]) -> bool {
 }
 
 
-fn kokushi_musou(hand: &[Tile]) -> bool { //! this should be combined hand
+fn kokushi_musou(hand: &[Tile]) -> bool {
     if hand.iter().all(is_yaochuuhai) {
         let mut pair_counter: u8 = 0;
         for i in 0..hand.len() - 1 {
@@ -1157,11 +1239,12 @@ fn yakuhai(result: &[Mentsu], jikaze: &Wind, bakaze: &Wind) -> u8 {
                 | Mentsu::Shouminkan(tiles) = mentsu
         {
             let tile = &tiles[0];
-            let mut count = 0 as u8;
-            match tile {
-                Tile::Honor(Honor::Red | Honor::Green | Honor::White) => count += 1,
-                _ => {}
-            }
+            let mut count = 0;
+            
+            if let Tile::Honor(Honor::Red | Honor::Green | Honor::White) = tile {
+                count += 1;
+            } 
+
             if let Tile::Honor(h) = tile {
                 if *h == wind_to_honor(jikaze) { 
                     count += 1; 
@@ -1611,11 +1694,11 @@ fn start_game(mut commands: Commands) {
         ClosedHand,
         Oya,
     ));
-    commands.spawn((
-        DiscardedTile(),
-        DiscardedBy(),
-        DiscardTurn(0),
-    ));
+    // commands.spawn((
+    //     DiscardedTile(),
+    //     DiscardedBy(),
+    //     DiscardTurn(0),
+    // ));
     commands.insert_resource(
         GameState { 
             rounds: 0, 
@@ -1640,7 +1723,6 @@ fn main() {
         .run();
 
 
-    // TODO: Add a check for removing FirstTurn
     // TODO: logical sorting when player picks up a tile
     
     //let mut player1 = Player {
