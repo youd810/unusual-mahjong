@@ -1,59 +1,8 @@
-// yaku todo
-// ?note to self: kan check = open mentsu, unusual yaku check = hand, normal yaku check = decompose result  
-// *Yakuman (Limit Hands)
-// !Kokushi Musou (Thirteen Orphans) done
-// !Suuankou (Four Concealed Triplets) done
-// !Daisangen (Big Three Dragons) done
-// !Shousuushii (Little Four Wind) done
-// !Daisuushii (Big Four Wind) done 
-// !Tsuuiisou (All Honors) done
-// !Chinroutou (All Terminals) done
-// !Ryuuiisou (All Green) done
-// !Chuuren Poutou (Nine Gates) done
-// !Suukantsu (Four Kans) done
-// !Tenhou (Heavenly Win — dealer wins on first draw) done?
-// !Chiihou (Earthly Win — non-dealer wins on first draw) done?
-// 
-// *6 Han
-// !Chinitsu (Full Flush) done
-// 
-// *3 Han
-// !Honitsu (Half Flush) done
-// !Ryanpeikou (Two Sets of Identical Sequences) done
-// !Junchan (All sets contain terminals) done
-// 
-// *2 Han
-// !Chanta (All sets contain terminals or honors) done
-// !Sanshoku Doujun (Three Color Straight) done 
-// !Sanshoku Doukou (Three Color Triplets) done
-// !Ittsu (Straight 1-9) done
-// !Toitoi (All Triplets) done
-// !Sanankou (Three Concealed Triplets) done
-// !Shousangen (Little Three Dragons) done
-// !Honroutou (All Terminals and Honors) done
-// !Chiitoitsu (Seven Pairs) done
-// !Sankantsu (Three Kans) done
-// !Double Riichi done
-// 
-// *1 Han
-// !Tanyao (All Simples) done
-// !Iipeikou (One Set of Identical Sequences) done
-// !Yakuhai / Fanpai (Value Tiles — seat Wind, round Wind, dragons) done
-// !Riichi done
-// !Ippatsu done
-// !Menzen Tsumo (Self-draw win with closed hand) done
-// !Pinfu (No-points hand) done
-// !Haitei (Win on last tile from wall) done
-// !Houtei (Win on last discard) done
-// !Rinshan Kaihou (Win after Kan draw) done
-// !Chankan (Robbing a Kan) done
-// 
-// *Special
-// !Tenpai/Machi done
+// TODO remaing todo 
 // Dora counting (not a yaku but affects scoring)
 // Fu calculation
 // Han → Score conversion table
-
+// custom yaku and rules later
 
 
 // TODO: return options for some of these (no)
@@ -91,7 +40,7 @@ enum Mentsu {
     Shouminkan(Vec<Tile>),
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 enum Wind {
     East,
     South,
@@ -106,7 +55,19 @@ enum ChiTilePos { // tile drawn/discarded
     Right,  
 }
 
+#[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
+enum TurnState {
+    #[default]
+    Setup,          
+    Draw,           
+    MainPhase,      
+    CallWindow,     
+    AdvanceTurn,   
+    RinshanDraw,
+}
 
+#[derive(Resource)]
+struct CurrentTurn(Entity); 
 
 #[derive(Resource)]
 struct GameState {
@@ -215,8 +176,20 @@ struct DeclareTsumoMessage {
     is_rinshan: bool,
 }
 
+#[derive(Component)]
+struct DrawnTile(Tile);
 
+#[derive(Message)]
+struct DiscardTileMessage {
+    player: Entity,
+    tile: Tile,
+    is_tsumogiri: bool, 
+}
 
+#[derive(Resource)]
+struct CallWindowTimer(Timer);
+
+#[derive(Debug)]
 struct HandResult {
     yaku_names: Vec<String>,
     total_han: u8,
@@ -650,9 +623,9 @@ fn can_declare_ron(
     wall: &Wall,
     is_chankan: bool,
     calls_made: bool,
-) -> bool {
+) -> Option<HandResult> {
     if !tenpai.0.contains(discard_tile) || is_furiten(discard_pile, tenpai) {
-        return false;
+        return None;
     }
 
     let mut combined_hand = hand.to_owned();
@@ -678,7 +651,7 @@ fn can_declare_ron(
     }
 
     // yaku validation
-    !evaluate_yaku(
+    let yaku_result = evaluate_yaku(
         &results,
         &raw_hand_plus_win,   // this shouldn't be raw hand only
         &combined_hand,      // combined hand
@@ -696,7 +669,13 @@ fn can_declare_ron(
         false,              // is_rinshan, ron is never rinshan
         is_chankan,          
         wall,
-        calls_made).yaku_names.is_empty() 
+        calls_made);
+        
+    if yaku_result.yaku_names.is_empty() {
+        None
+    } else {
+        Some(yaku_result)
+    } 
 
 }
 
@@ -715,7 +694,7 @@ fn declare_ron(
             let is_double = maybe_riichi.is_some_and(|r| r.is_double);
             let is_ippatsu = maybe_riichi.is_some_and(|r| r.is_ippatsu_alive);
 
-            if can_declare_ron(
+            if let Some(yaku_result) = can_declare_ron(
                 &message.discard_tile,
                 &hand.0,
                 &open.0,
@@ -758,9 +737,9 @@ fn can_declare_tsumo(
     wall: &Wall,
     is_rinshan: bool,
     calls_made: bool,
-) -> bool {
+) -> Option<HandResult> {
     if !tenpai.0.contains(drawn_tile)  {
-        return false;
+        return None;
     }
 
     let mut combined_hand = hand.to_owned();
@@ -786,7 +765,7 @@ fn can_declare_tsumo(
     }
 
     // yaku validation
-    !evaluate_yaku(
+    let yaku_result = evaluate_yaku(
         &results,
         &raw_hand_plus_win,            
         &combined_hand,      
@@ -804,7 +783,13 @@ fn can_declare_tsumo(
         is_rinshan,              
         false,          // is_chankan, tsumo can't chankan
         wall,
-        calls_made).yaku_names.is_empty() 
+        calls_made);
+    
+    if yaku_result.yaku_names.is_empty() {
+        None
+    } else {
+        Some(yaku_result)
+    }
 
 }
 
@@ -823,7 +808,7 @@ fn declare_tsumo(
             let is_double = maybe_riichi.is_some_and(|r| r.is_double);
             let is_ippatsu = maybe_riichi.is_some_and(|r| r.is_ippatsu_alive);
 
-            if can_declare_tsumo(
+            if let Some(yaku_result) =  can_declare_tsumo(
                 &message.drawn_tile, 
                 &hand.0, 
                 &open.0, 
@@ -944,6 +929,8 @@ fn declare_pon(
     mut messages: MessageReader<DeclarePonMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&mut Riichi>)>,
     mut game: ResMut<GameState>,
+    mut current_turn: ResMut<CurrentTurn>,
+    mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
 ) {
     for message in messages.read(){
@@ -961,6 +948,8 @@ fn declare_pon(
                 }
                 commands.entity(message.player).remove::<ClosedHand>();
                 game.calls_made = true;
+                current_turn.0 = message.player;
+                next_state.set(TurnState::MainPhase);
         }
     }
 
@@ -1004,6 +993,8 @@ fn declare_chi(
     mut messages: MessageReader<DeclareChiMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, &Jikaze, Option<&mut Riichi>)>,
     mut game: ResMut<GameState>,
+    mut current_turn: ResMut<CurrentTurn>,
+    mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
 ) {
     for message in messages.read() {
@@ -1058,6 +1049,8 @@ fn declare_chi(
                     riichi.is_ippatsu_alive = false;
                 }
             }
+            current_turn.0 = message.player;
+            next_state.set(TurnState::MainPhase);
         }
     }
 }
@@ -1079,6 +1072,8 @@ fn declare_kan(
     mut messages: MessageReader<DeclareKanMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&mut Riichi>)>,
     mut game: ResMut<GameState>,
+    mut current_turn: ResMut<CurrentTurn>,
+    mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands
 ) { 
     for message in messages.read() {
@@ -1116,6 +1111,8 @@ fn declare_kan(
                         riichi.is_ippatsu_alive = false;
                     }
                 }
+                current_turn.0 = message.player;
+                next_state.set(TurnState::RinshanDraw);
             }
         }
     }
@@ -1598,7 +1595,6 @@ fn all_tiles() -> Vec<Tile> {
 // example: [sou1, sou1, sou1 sou2, sou2, sou2, sou3, sou3, sou3] 
 // can return [shuntsu, shuntsu, shuntsu] or [koutsu, koutsu, koutsu]
 // so the final result is a vector of those two
-// ! what about hadaka tanki?
 fn decompose(tiles: &[Tile]) -> Vec<Vec<Mentsu>> {
     let mut results = vec![];
 
@@ -1677,28 +1673,40 @@ fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<Vec<M
 }
 
 
-fn start_game(mut commands: Commands) {
+fn start_game(
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>
+) {
     let mut wall = vec![];
     for _ in 0..4 {
         wall.extend(all_tiles());
     }
     wall.shuffle(&mut rand::rng());
     
-    commands.spawn((
-        PlayerTag, 
-        Points(25000),
-        Jikaze(Wind::East),
-        Hand(vec![]),
-        OpenMentsu(vec![]),
-        Alive,
-        ClosedHand,
-        Oya,
-    ));
-    // commands.spawn((
-    //     DiscardedTile(),
-    //     DiscardedBy(),
-    //     DiscardTurn(0),
-    // ));
+    let seats = [Wind::East, Wind::South, Wind::West, Wind::North];
+    let mut starting_player = Entity::PLACEHOLDER;
+
+    for &wind in &seats {
+        let starting_hand: Vec<Tile> = wall.drain(wall.len() - 13..).collect();
+        let mut player = commands.spawn((
+            PlayerTag, 
+            Points(25000),
+            Jikaze(wind),
+            Hand(starting_hand),
+            OpenMentsu(vec![]),
+            Kawa(vec![]),
+            Alive,
+            ClosedHand,
+            Oya,
+        ));
+
+         if wind == Wind::East {
+            player.insert(Oya);
+            starting_player = player.id();
+        }
+
+    }
+
     commands.insert_resource(
         GameState { 
             rounds: 0, 
@@ -1708,84 +1716,149 @@ fn start_game(mut commands: Commands) {
             calls_made: false,
         }
     );
-    commands.insert_resource(
-        Wall(wall)
-    );
-
+    commands.insert_resource(CurrentTurn(starting_player));
+    commands.insert_resource(Wall(wall));
+    commands.insert_resource(CallWindowTimer(Timer::from_seconds(2.0, TimerMode::Once)));
+    println!("ゲーム開始");
+    next_state.set(TurnState::Draw);
 }
+
+
+fn draw_tile(
+    current_turn: Res<CurrentTurn>,
+    mut wall: ResMut<Wall>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>, // used to change the game phase
+) {
+    let drawn = wall.0.remove(0); 
+    commands.entity(current_turn.0).insert(DrawnTile(drawn));
+
+    next_state.set(TurnState::MainPhase);
+
+    println!("{} draws {:?}", current_turn.0, drawn);
+}
+
+
+fn discard_tile(
+    mut messages: MessageReader<DiscardTileMessage>,
+    mut query: Query<(&mut Hand, &mut DrawnTile, &mut Kawa)>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>
+) {
+    for message in messages.read() {
+        if let Ok((mut hand, drawn, mut kawa)) =  query.get_mut(message.player) {
+            
+            if !message.is_tsumogiri { // the opposite should do nothing
+                hand.0.push(drawn.0);
+                if let Some(idx) = hand.0.iter().position(|x| *x == message.tile) {
+                    hand.0.remove(idx);
+                }
+                hand.0.sort();
+            }
+
+            kawa.0.push(message.tile);
+
+            commands.entity(message.player).remove::<DrawnTile>();
+            commands.spawn((
+                DiscardedTile(message.tile),
+                DiscardedBy(message.player),
+            ));
+
+            next_state.set(TurnState::CallWindow);
+
+            println!("{} discards {:?}", message.player, message.tile);
+        }
+    }
+}
+
+fn next_turn_wind(current: &Wind) -> Wind {
+    match current {
+        Wind::East => Wind::South,
+        Wind::South => Wind::West,
+        Wind::West => Wind::North,
+        Wind::North => Wind::East,
+    }
+}
+
+
+fn next_turn(
+    mut current_turn: ResMut<CurrentTurn>,
+    mut query: Query<(Entity, &Jikaze)>,
+    mut next_state: ResMut<NextState<TurnState>>,
+) {
+    if let Ok((_, current_jikaze)) = query.get_mut(current_turn.0){
+        let next_jikaze = next_turn_wind(&current_jikaze.0);
+        for (player, jikaze) in query.iter() {
+            if jikaze.0 == next_jikaze {
+                current_turn.0 = player;
+                next_state.set(TurnState::Draw);
+                break;
+            }
+        }
+    }
+}
+
+
+// for testing
+fn auto_discard_bot(
+    current_turn: Res<CurrentTurn>,
+    query: Query<&DrawnTile>,
+    mut messages: MessageWriter<DiscardTileMessage>,
+) {
+    if let Ok(drawn) = query.get(current_turn.0) {
+
+        messages.write(DiscardTileMessage {
+            player: current_turn.0,
+            tile: drawn.0,
+            is_tsumogiri: true,
+        });
+    }
+}
+
+
+fn call_window_timeout(
+    time: Res<Time>, // built-in clock
+    mut call_timer: ResMut<CallWindowTimer>,
+    mut next_state: ResMut<NextState<TurnState>>,
+) {
+    
+    call_timer.0.tick(time.delta());
+
+    if call_timer.0.just_finished() {
+        next_state.set(TurnState::AdvanceTurn);
+
+        call_timer.0.reset();
+    }
+}
+
+
 
 
 fn main() {
 
     App::new()
         .add_plugins(DefaultPlugins)
+        .init_state::<TurnState>()
+        .add_message::<DiscardTileMessage>()
+        .add_message::<DeclarePonMessage>()
+        .add_message::<DeclareChiMessage>()
+        .add_message::<DeclareKanMessage>()
+        .add_message::<DeclareRiichiMessage>()
+        .add_message::<DeclareRonMessage>()
+        .add_message::<DeclareTsumoMessage>()
         .add_systems(Startup, start_game)
+        .add_systems(OnEnter(TurnState::Setup), start_game)
+        .add_systems(OnEnter(TurnState::Draw), draw_tile)
+        .add_systems(OnEnter(TurnState::MainPhase), discard_tile)
+        .add_systems(Update, (
+            auto_discard_bot,
+            discard_tile, 
+        ).run_if(in_state(TurnState::MainPhase)))
+        .add_systems(Update, call_window_timeout.run_if(in_state(TurnState::CallWindow)))
+        .add_systems(OnEnter(TurnState::AdvanceTurn), next_turn)
         .run();
 
 
     // TODO: logical sorting when player picks up a tile
-    
-    //let mut player1 = Player {
-    //    points: 123,
-    //    jikaze: Wind::East,
-    //    hand: vec![],
-    //    drawn: Tile::Man(3),
-    //    opponent_discard: Tile::Man(4),
-    //    open_mentsu: vec![],
-    //    is_hand_closed: true,
-    //    is_tenpai: false,
-    //    is_alive: true,
-    //    aggression: 10,
-    //    defense: 10,
-    //    cheating_inclination: 10, 
-    //};
-//
-    //let game = Game {
-    //    rounds: 3,
-    //    turns: 1,
-    //    wall: all_tiles(),
-    //    bakaze: Wind::East,
-    //    bullet: 123,
-    //};
-//
-    //// let mut wall = vec![Tile::Sou(1), Tile::Honor(Honor::Red)];
-//
-    //// logical sorting when player picks up a card
-    //player1.hand.extend(vec![Tile::Sou(1), Tile::Honor(Honor::Red)]);
-    //player1.hand.sort();
-    //if let Some(results) = check_win(&player1.hand, &player1) {
-//
-    //    kokushi_musou(&player1.hand);
-    //    let hand = combine_tiles(&player1);
-    //    kokushi_musou(&player1.hand);
-    //    // yakuman
-    //    tsuuisou(&hand);
-    //    
-    //    daisangen(&results);
-    //    suukantsu(&player1);
-//
-    //    // regular yaku with unusual pattern
-    //    chiitoitsu(&hand);
-//
-    //    // regular yaku
-    //    iipeikou(&results);  
-    //    tanyao(&hand); // closed
-    //    sankantsu(&player1);
-    //    
-    //    yakuhai(&player1, &results, &game.bakaze); // open
-    //    
-    //    toitoi(&results);
-    //    honitsu(&hand);
-    //    if chinitsu(&hand) {}
-    //     // other yaku
-    //
-//
-    //}
-//
-    //for tile in game.wall {
-    //    for _ in 0..4 {
-    //        println!("{:?}", tile);
-    //    } 
-    //}
     
 }
