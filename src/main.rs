@@ -1,4 +1,4 @@
-// TODO remaing todo 
+// TODO remaining todos
 // Dora counting (not a yaku but affects scoring)
 // Fu calculation
 // Han → Score conversion table
@@ -67,7 +67,7 @@ enum TurnState {
 }
 
 #[derive(Resource)]
-struct CurrentTurn(Entity); 
+struct CurrentTurn(Entity); // id of the current tsumo
 
 #[derive(Resource)]
 struct GameState {
@@ -133,6 +133,8 @@ struct DiscardedTile(Tile);
 #[derive(Component)]
 struct DiscardedBy(Entity);
 
+#[derive(Component)]
+struct CurrentDiscard;
 
 
 #[derive(Message)]
@@ -197,34 +199,6 @@ struct HandResult {
     is_yakuman: bool,
 }
 
-// use or dispose later
-struct Player {
-    points: i32,
-    hand: Vec<Tile>,
-    drawn: Option<Tile>,
-    
-    open_mentsu: Vec<Mentsu>,
-    jikaze: Wind,
-    is_tenpai: bool,
-    is_hand_closed: bool,
-    is_riichi: bool,
-    turns_since_riichi: u8,
-    is_alive: bool,
-    aggression: u8,
-    defense: u8,
-    cheating_inclination: u8, 
-}
-
-// same with this
-struct Game {
-    rounds: u8,
-    turns: u8,
-    oya: Player,
-    wall: Vec<Tile>,
-    bakaze: Wind,
-    bullet: u8,
-    player_discard: Option<Tile>,
-}
 
 fn check_ryuukoku(wall: &Wall) -> bool {
     wall.0.len() <= 14 // dead wall
@@ -237,6 +211,7 @@ fn is_furiten(discard_pile: &Kawa, tenpai: &Tenpai) -> bool {
 
 fn evaluate_yaku(
     results: &[Vec<Mentsu>],
+    thirteen_tiles: &[Tile],
     raw_hand: &[Tile],
     combined_hand: &[Tile],
     open_mentsu: &[Mentsu],
@@ -275,7 +250,7 @@ fn evaluate_yaku(
     // 2
     for result in results {
         let eval = evaluate_standard(
-            result, combined_hand, open_mentsu,
+            result, thirteen_tiles, combined_hand, open_mentsu,
             is_hand_closed, is_oya, is_riichi, is_double_riichi,
             is_ippatsu, bakaze, jikaze, turns, winning_tile,
             is_tsumo, is_rinshan, is_chankan, wall, calls_made
@@ -302,6 +277,7 @@ fn evaluate_yaku(
 
 fn evaluate_standard(
     result: &[Mentsu],
+    thirteen_tiles: &[Tile],
     combined_hand: &[Tile],
     open_mentsu: &[Mentsu],
     is_hand_closed: bool,
@@ -331,7 +307,7 @@ fn evaluate_standard(
         eval.is_yakuman = true;
     }
 
-    if suuankou(result) {
+    if suuankou(result, winning_tile, is_tsumo) {
         eval.yaku_names.push("Suuankou".to_string());
         eval.is_yakuman = true;
     }
@@ -430,7 +406,7 @@ fn evaluate_standard(
         eval.total_han += 2;
     }
 
-    if sanankou(result) {
+    if sanankou(result, winning_tile, is_tsumo, thirteen_tiles) {
         eval.yaku_names.push("Sanankou".to_string());
         eval.total_han += 2;
     }
@@ -653,6 +629,7 @@ fn can_declare_ron(
     // yaku validation
     let yaku_result = evaluate_yaku(
         &results,
+        hand,
         &raw_hand_plus_win,   // this shouldn't be raw hand only
         &combined_hand,      // combined hand
         open_mentsu,
@@ -767,6 +744,7 @@ fn can_declare_tsumo(
     // yaku validation
     let yaku_result = evaluate_yaku(
         &results,
+        hand,
         &raw_hand_plus_win,            
         &combined_hand,      
         open_mentsu,
@@ -838,6 +816,7 @@ fn check_tenpai(raw_hand: &[Tile]) -> Vec<Tile> {
     for tile in all_tiles() {
         let mut hand_speculated = raw_hand.to_owned();
         hand_speculated.push(tile);
+        hand_speculated.sort(); // ! idk if this should be here on in the gameplay loop (after every draw)
          if !decompose(&hand_speculated).is_empty() {
             waiting_on.push(tile);
         }
@@ -928,9 +907,11 @@ fn can_declare_pon(hand: &[Tile], tile: &Tile,) -> bool {
 fn declare_pon(
     mut messages: MessageReader<DeclarePonMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&mut Riichi>)>,
+    mut tile_query: Single<Entity, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
+    mut timer: ResMut<CallWindowTimer>,
     mut commands: Commands,
 ) {
     for message in messages.read(){
@@ -947,12 +928,12 @@ fn declare_pon(
                     }
                 }
                 commands.entity(message.player).remove::<ClosedHand>();
-                game.calls_made = true;
+                commands.entity(*tile_query).despawn(); 
                 current_turn.0 = message.player;
                 next_state.set(TurnState::MainPhase);
+                timer.0.reset();
         }
     }
-
 }
 
 
@@ -992,7 +973,9 @@ fn is_kamicha(self_wind: &Wind, discard_wind: &Wind) -> bool {
 fn declare_chi(
     mut messages: MessageReader<DeclareChiMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, &Jikaze, Option<&mut Riichi>)>,
+    mut tile_query: Single<Entity, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
+    mut timer: ResMut<CallWindowTimer>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
@@ -1043,6 +1026,7 @@ fn declare_chi(
             }
             
             commands.entity(message.player).remove::<ClosedHand>();
+            commands.entity(*tile_query).despawn(); 
             game.calls_made = true;
             for (_, _, _, mut maybe_riichi) in query.iter_mut() {
                 if let Some(riichi) = maybe_riichi.as_deref_mut() {
@@ -1051,6 +1035,7 @@ fn declare_chi(
             }
             current_turn.0 = message.player;
             next_state.set(TurnState::MainPhase);
+            timer.0.reset();
         }
     }
 }
@@ -1071,7 +1056,9 @@ fn can_declare_kan_from_pon(open_mentsu: &[Mentsu], tile: &Tile) -> bool{
 fn declare_kan(
     mut messages: MessageReader<DeclareKanMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&mut Riichi>)>,
+    mut tile_query: Single<Entity, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
+    mut timer: ResMut<CallWindowTimer>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands
@@ -1084,6 +1071,7 @@ fn declare_kan(
             if message.is_discard && count == 3 {
                 open_mentsu.0.push(Mentsu::Daiminkan(vec![*tile; 4]));
                 hand.0.retain(|x| x != tile);
+                commands.entity(*tile_query).despawn(); 
                 commands.entity(message.player).remove::<ClosedHand>(); 
                 is_kan_successful = true;
             } 
@@ -1113,6 +1101,7 @@ fn declare_kan(
                 }
                 current_turn.0 = message.player;
                 next_state.set(TurnState::RinshanDraw);
+                timer.0.reset();
             }
         }
     }
@@ -1142,33 +1131,13 @@ fn ryuuiisou(hand: &[Tile]) -> bool {
 }
 
 
-// ! deprecated
-fn check_win(hand: &[Tile], player: &Player) -> Option<Vec<Vec<Mentsu>>> {
-    let mut results = decompose(hand);
-    if results.is_empty() {
-        None
-    } else {
-        if !player.open_mentsu.is_empty() {
-            for result in &mut results {
-                result.extend(player.open_mentsu.clone());
-                // result.sort();
-            }
-        }
-        Some(results)
-    }
-}
-
-
-
-
-
 fn tanyao(hand: &[Tile]) -> bool {
     hand.iter().all(|x| !is_yaochuuhai(x))    
 }
 
 
 fn kokushi_musou(hand: &[Tile]) -> bool {
-    if hand.iter().all(is_yaochuuhai) {
+    if hand.len() == 14 && hand.iter().all(is_yaochuuhai) {
         let mut pair_counter: u8 = 0;
         for i in 0..hand.len() - 1 {
             if hand[i] == hand[i+1] {
@@ -1258,21 +1227,29 @@ fn yakuhai(result: &[Mentsu], jikaze: &Wind, bakaze: &Wind) -> u8 {
 }
 
 
-fn sanankou(result: &[Mentsu]) -> bool {
+fn sanankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool, thirteen_tiles: &[Tile]) -> bool {
     result
         .iter()
-        .filter(|mentsu| 
-            matches!(mentsu, Mentsu::Koutsu(_, true) | Mentsu::Ankan(_)))
-        .count() == 3
+        .filter(|mentsu| {
+            if let Mentsu::Koutsu(tiles, true) | Mentsu::Ankan(tiles) = mentsu {
+                !(tiles[0] == *winning_tile && !is_tsumo && thirteen_tiles.iter().filter(|x| *x == winning_tile).count() == 2)
+            } else {
+                false
+            }
+        }).count() == 3
 }
 
 
-fn suuankou(result: &[Mentsu]) -> bool {
+fn suuankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool) -> bool {
     result
         .iter()
-        .filter(|mentsu| 
-            matches!(mentsu, Mentsu::Koutsu(_, true) | Mentsu::Ankan(_)))
-        .count() == 4 
+        .filter(|mentsu|{
+            if let Mentsu::Koutsu(tiles, true) | Mentsu::Ankan(tiles) = mentsu {
+                !(tiles[0] == *winning_tile && !is_tsumo)
+            } else {
+                false
+            }
+        }).count() == 4 
 }
 
 
@@ -1760,6 +1737,7 @@ fn discard_tile(
 
             commands.entity(message.player).remove::<DrawnTile>();
             commands.spawn((
+                CurrentDiscard,
                 DiscardedTile(message.tile),
                 DiscardedBy(message.player),
             ));
@@ -1785,6 +1763,7 @@ fn next_turn(
     mut current_turn: ResMut<CurrentTurn>,
     mut query: Query<(Entity, &Jikaze)>,
     mut next_state: ResMut<NextState<TurnState>>,
+    mut game: ResMut<GameState>
 ) {
     if let Ok((_, current_jikaze)) = query.get_mut(current_turn.0){
         let next_jikaze = next_turn_wind(&current_jikaze.0);
@@ -1792,6 +1771,7 @@ fn next_turn(
             if jikaze.0 == next_jikaze {
                 current_turn.0 = player;
                 next_state.set(TurnState::Draw);
+                game.turns += 1;
                 break;
             }
         }
@@ -1820,18 +1800,18 @@ fn call_window_timeout(
     time: Res<Time>, // built-in clock
     mut call_timer: ResMut<CallWindowTimer>,
     mut next_state: ResMut<NextState<TurnState>>,
+    tile_query: Single<Entity, With<CurrentDiscard>>,
+    mut commands: Commands
 ) {
     
     call_timer.0.tick(time.delta());
 
     if call_timer.0.just_finished() {
+        commands.entity(*tile_query).remove::<CurrentDiscard>();
         next_state.set(TurnState::AdvanceTurn);
-
         call_timer.0.reset();
     }
 }
-
-
 
 
 fn main() {
@@ -1846,10 +1826,8 @@ fn main() {
         .add_message::<DeclareRiichiMessage>()
         .add_message::<DeclareRonMessage>()
         .add_message::<DeclareTsumoMessage>()
-        .add_systems(Startup, start_game)
         .add_systems(OnEnter(TurnState::Setup), start_game)
         .add_systems(OnEnter(TurnState::Draw), draw_tile)
-        .add_systems(OnEnter(TurnState::MainPhase), discard_tile)
         .add_systems(Update, (
             auto_discard_bot,
             discard_tile, 
