@@ -72,7 +72,6 @@ struct CurrentTurn(Entity); // id of the current tsumo
 #[derive(Resource)]
 struct GameState {
     rounds: u8,
-    turns: u8,
     bakaze: Wind,
     bullet: u8,
     calls_made: bool,  // ! IMPORTANT: removed after the first call
@@ -204,8 +203,59 @@ fn check_ryuukoku(wall: &Wall) -> bool {
     wall.0.len() <= 14 // dead wall
 }
 
-fn is_furiten(discard_pile: &Kawa, tenpai: &Tenpai) -> bool {
-    tenpai.0.iter().any(|wait| discard_pile.0.contains(wait))
+fn is_furiten(kawa: &Kawa, tenpai: &Tenpai) -> bool {
+    tenpai.0.iter().any(|wait| kawa.0.contains(wait))
+}
+
+
+fn calculate_fu(
+    result: &[Mentsu],
+    jikaze: &Wind,
+    bakaze: &Wind,
+    is_tsumo: bool,
+    is_hand_closed: bool
+) -> u8 {
+    let mut fu: u8 = 20;
+
+    if is_tsumo {
+        fu += 2; // exception for pinfu tsumo later
+    } else if is_hand_closed {
+        fu += 10; // menzen ron
+    }
+
+    for mentsu in result.iter() {
+        match mentsu {
+            Mentsu::Koutsu(tiles, true) => {
+                fu += if is_yaochuuhai(&tiles[0]) {8} else {4};
+            }
+            Mentsu::Koutsu(tiles, false) => {
+                fu += if is_yaochuuhai(&tiles[0]) {4} else {2};
+            }
+            Mentsu::Ankan(tiles) => {
+                fu += if is_yaochuuhai(&tiles[0]) {32} else {16};
+            }
+            Mentsu::Daiminkan(tiles) | Mentsu::Shouminkan(tiles) => {
+                fu += if is_yaochuuhai(&tiles[0]) {16} else {8};
+            }
+            Mentsu::Jantou(tiles) => {
+                let tile = &tiles[0];
+                if let Tile::Honor(Honor::Red | Honor::Green | Honor::White) = tile {
+                    fu += 2;
+                }
+                // these stack
+                if let Tile::Honor(h) = tile {
+                    if *h == wind_to_honor(jikaze) { fu += 2; }
+                    if *h == wind_to_honor(bakaze) { fu += 2; }
+                }
+            }
+            _ => {} // shuntsu
+        }
+    }
+
+    // TODO: wait fu (kanchan, penchan, tanki)
+    // TODO: round up to nearest 10
+
+    fu
 }
 
 
@@ -222,7 +272,7 @@ fn evaluate_yaku(
     is_ippatsu: bool,
     bakaze: &Wind,
     jikaze: &Wind,
-    turns: u8,
+    kawa: &Kawa,
     winning_tile: &Tile,
     is_tsumo: bool,
     is_rinshan: bool,
@@ -243,7 +293,7 @@ fn evaluate_yaku(
             yaku_names: vec!["Kokushi Musou".to_string()],
             total_han: 0, total_fu: 0, is_yakuman: true,
         };
-        add_situational_yakuman(&mut eval, turns, is_oya, is_tsumo, calls_made);
+        add_situational_yakuman(&mut eval, kawa, is_oya, is_tsumo, calls_made);
         return eval;
     }
 
@@ -252,7 +302,7 @@ fn evaluate_yaku(
         let eval = evaluate_standard(
             result, thirteen_tiles, combined_hand, open_mentsu,
             is_hand_closed, is_oya, is_riichi, is_double_riichi,
-            is_ippatsu, bakaze, jikaze, turns, winning_tile,
+            is_ippatsu, bakaze, jikaze, kawa, winning_tile,
             is_tsumo, is_rinshan, is_chankan, wall, calls_made
         );
         if is_better(&eval, &best) { 
@@ -264,7 +314,7 @@ fn evaluate_yaku(
     if is_hand_closed && chiitoitsu(raw_hand) {
         let eval = evaluate_chiitoitsu(
             raw_hand, is_riichi, is_double_riichi, is_ippatsu,
-            is_tsumo, is_chankan, is_oya, turns, wall, calls_made
+            is_tsumo, is_chankan, is_oya, kawa, wall, calls_made
         );
         if is_better(&eval, &best) { 
             best = eval; 
@@ -287,7 +337,7 @@ fn evaluate_standard(
     is_ippatsu: bool,
     bakaze: &Wind,
     jikaze: &Wind,
-    turns: u8,
+    kawa: &Kawa,
     winning_tile: &Tile,
     is_tsumo: bool,
     is_rinshan: bool,
@@ -347,7 +397,7 @@ fn evaluate_standard(
         eval.is_yakuman = true;
     }
 
-    add_situational_yakuman(&mut eval, turns, is_oya, is_tsumo, calls_made);
+    add_situational_yakuman(&mut eval, kawa, is_oya, is_tsumo, calls_made);
 
     if eval.is_yakuman {
         return eval;
@@ -453,7 +503,7 @@ fn evaluate_chiitoitsu(
     is_tsumo: bool,
     is_chankan: bool,
     is_oya: bool,
-    turns: u8,
+    kawa: &Kawa,
     wall: &Wall,
     calls_made: bool,
 ) -> HandResult {
@@ -469,7 +519,7 @@ fn evaluate_chiitoitsu(
         eval.yaku_names.clear();
         eval.yaku_names.push("Tsuuiisou".to_string());
         eval.is_yakuman = true;
-        add_situational_yakuman(&mut eval, turns, is_oya, is_tsumo, calls_made);
+        add_situational_yakuman(&mut eval, kawa, is_oya, is_tsumo, calls_made);
         return eval;
     }
 
@@ -500,13 +550,13 @@ fn evaluate_chiitoitsu(
 }
 
 
-fn add_situational_yakuman(eval: &mut HandResult, turns: u8, is_oya: bool, is_tsumo: bool, calls_made: bool) {
+fn add_situational_yakuman(eval: &mut HandResult, kawa: &Kawa, is_oya: bool, is_tsumo: bool, calls_made: bool) {
     
-    if tenhou(turns, is_oya, is_tsumo, calls_made) {
+    if tenhou(kawa, is_oya, is_tsumo, calls_made) {
         eval.yaku_names.push("Tenhou".to_string());
     }
 
-    if chiihou(turns, is_oya, is_tsumo, calls_made) {
+    if chiihou(kawa, is_oya, is_tsumo, calls_made) {
         eval.yaku_names.push("Chiihou".to_string());
     }
 
@@ -568,8 +618,12 @@ fn add_situational(
 
 
 fn is_better(new: &HandResult, old: &HandResult) -> bool {
-    if new.is_yakuman && !old.is_yakuman { return true; }
-    if !new.is_yakuman && old.is_yakuman { return false; }
+    if new.is_yakuman && !old.is_yakuman { 
+        return true; 
+    }
+    if !new.is_yakuman && old.is_yakuman { 
+        return false; 
+    }
     if new.is_yakuman && old.is_yakuman {
         return new.yaku_names.len() > old.yaku_names.len();
     }
@@ -587,10 +641,9 @@ fn can_declare_ron(
     hand: &[Tile],
     open_mentsu: &[Mentsu],
     tenpai: &Tenpai,
-    discard_pile: &Kawa,
     is_hand_closed: bool,
     is_oya: bool,
-    turns: u8,
+    kawa: &Kawa,
     is_riichi: bool,
     is_double_riichi: bool,
     is_ippatsu: bool,
@@ -600,7 +653,7 @@ fn can_declare_ron(
     is_chankan: bool,
     calls_made: bool,
 ) -> Option<HandResult> {
-    if !tenpai.0.contains(discard_tile) || is_furiten(discard_pile, tenpai) {
+    if !tenpai.0.contains(discard_tile) || is_furiten(kawa, tenpai) {
         return None;
     }
 
@@ -640,7 +693,7 @@ fn can_declare_ron(
         is_ippatsu,
         bakaze,
         jikaze,
-        turns,                             // for tenhou/chiihou
+        kawa,                             // for tenhou/chiihou
         discard_tile,
         false,                 // is_tsumo, ron is never tsumo
         false,              // is_rinshan, ron is never rinshan
@@ -676,10 +729,9 @@ fn declare_ron(
                 &hand.0,
                 &open.0,
                 tenpai,
-                kawa,
                 is_closed,
                 is_oya,
-                game.turns,
+                kawa,
                 is_riichi,
                 is_double,
                 is_ippatsu, 
@@ -705,7 +757,7 @@ fn can_declare_tsumo(
     tenpai: &Tenpai,
     is_hand_closed: bool,
     is_oya: bool,
-    turns: u8,
+    kawa: &Kawa,
     is_riichi: bool,
     is_double_riichi: bool,
     is_ippatsu: bool,
@@ -755,7 +807,7 @@ fn can_declare_tsumo(
         is_ippatsu,
         bakaze,
         jikaze,
-        turns,                             // for tenhou/chiihou
+        kawa,                             // for tenhou/chiihou
         drawn_tile,
         true,                
         is_rinshan,              
@@ -774,13 +826,13 @@ fn can_declare_tsumo(
 
 fn declare_tsumo(
     mut messages: MessageReader<DeclareTsumoMessage>,
-    query: Query<(&Hand, &OpenMentsu, &Tenpai, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>)>,
+    query: Query<(&Hand, &OpenMentsu, &Tenpai, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>, &Kawa)>,
     game: Res<GameState>,
     wall: Res<Wall>
 ) {
     for message in messages.read() {
         if let Ok((hand, open, tenpai, jikaze,
-            is_closed, is_oya, maybe_riichi)) = query.get(message.player)
+            is_closed, is_oya, maybe_riichi, kawa)) = query.get(message.player)
         {
             let is_riichi = maybe_riichi.is_some();
             let is_double = maybe_riichi.is_some_and(|r| r.is_double);
@@ -793,7 +845,7 @@ fn declare_tsumo(
                 tenpai,
                 is_closed, 
                 is_oya, 
-                game.turns, 
+                kawa, 
                 is_riichi,
                 is_double, 
                 is_ippatsu,
@@ -872,15 +924,15 @@ fn can_declare_riichi(hand: &[Tile], is_closed: bool, is_riichi: bool, points: i
 
 fn declare_riichi(
     mut messages: MessageReader<DeclareRiichiMessage>, // store the entity id
-    mut query: Query<(Has<ClosedHand>, Has<Riichi>, &Hand, &mut Points)>, // store the data
+    mut query: Query<(Has<ClosedHand>, Has<Riichi>, &Hand, &mut Points, &Kawa)>, // store the data
     wall: Res<Wall>,
     game: Res<GameState>,
     mut commands: Commands,
 ) {
     for message in messages.read() {
-        if let Ok((is_closed, is_riichi, hand, mut points)) = query.get_mut(message.player) 
+        if let Ok((is_closed, is_riichi, hand, mut points, kawa)) = query.get_mut(message.player) 
             && can_declare_riichi(&hand.0, is_closed, is_riichi, points.0, &*wall) {
-                let is_double = game.turns == 1 && !game.calls_made;
+                let is_double = kawa.0.is_empty() && !game.calls_made;
                 commands.entity(message.player).insert(Riichi { 
                     is_double, 
                     is_ippatsu_alive: true, 
@@ -1245,7 +1297,7 @@ fn suuankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool) -> bool {
         .iter()
         .filter(|mentsu|{
             if let Mentsu::Koutsu(tiles, true) | Mentsu::Ankan(tiles) = mentsu {
-                !(tiles[0] == *winning_tile && !is_tsumo)
+                tiles[0] != *winning_tile || is_tsumo
             } else {
                 false
             }
@@ -1367,7 +1419,9 @@ fn suukantsu(open_mentsu: &[Mentsu]) -> bool {
 
 
 fn chiitoitsu(hand: &[Tile]) -> bool {
-    if hand.len() != 14 {return false;}
+    if hand.len() != 14 {
+        return false;
+    }
     let mut i = 0;
     let mut seen = vec![];
     while i < hand.len() - 1 {
@@ -1512,7 +1566,10 @@ fn pinfu(result: &[Mentsu], winning_tile: &Tile, jikaze: &Wind, bakaze: &Wind) -
         match mentsu {
             Mentsu::Shuntsu(tiles, true) => {
                 shuntsu_count += 1;
-                if is_ryanmen_wait(tiles, winning_tile) {
+                // ? this is right there's no way this is wrong please tell me this is enough
+                // https://riichi.wiki/Pinfu
+                // https://riichi.wiki/Complex_waits
+                if is_ryanmen_wait(tiles, winning_tile) { 
                     has_ryanmen = true;
                 }
             }
@@ -1539,12 +1596,12 @@ fn houtei(wall: &Wall, is_tsumo: bool) -> bool {
     wall.0.len() == 14 && !is_tsumo
 }
 
-fn tenhou(turns: u8, is_oya: bool, is_tsumo: bool, calls_made: bool) -> bool {
-    turns == 1 && is_oya && is_tsumo && !calls_made
+fn tenhou(kawa: &Kawa, is_oya: bool, is_tsumo: bool, calls_made: bool) -> bool {
+    kawa.0.is_empty() && is_oya && is_tsumo && !calls_made
 } 
 
-fn chiihou(turns: u8, is_oya: bool, is_tsumo: bool, calls_made: bool) -> bool {
-    turns == 1 && !is_oya && is_tsumo && !calls_made
+fn chiihou(kawa: &Kawa, is_oya: bool, is_tsumo: bool, calls_made: bool) -> bool {
+    kawa.0.is_empty() && !is_oya && is_tsumo && !calls_made
 } 
 
 
@@ -1686,8 +1743,7 @@ fn start_game(
 
     commands.insert_resource(
         GameState { 
-            rounds: 0, 
-            turns: 1, 
+            rounds: 0,  
             bakaze: Wind::East, 
             bullet: 1,
             calls_made: false,
@@ -1771,7 +1827,6 @@ fn next_turn(
             if jikaze.0 == next_jikaze {
                 current_turn.0 = player;
                 next_state.set(TurnState::Draw);
-                game.turns += 1;
                 break;
             }
         }
