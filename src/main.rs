@@ -1,8 +1,9 @@
 // TODO remaining todos
-// Dora counting (not a yaku but affects scoring)
-// Fu calculation
+// Dora counting (not a yaku but affects scoring) (Done?)
+// Fu calculation (done?)
 // Han → Score conversion table
 // custom yaku and rules later
+// ? 途中流局
 
 
 // TODO: return options for some of these (no)
@@ -80,6 +81,15 @@ struct GameState {
 #[derive(Resource)]
 struct Wall(Vec<Tile>);
 
+#[derive(Resource)]
+struct DeadWall {
+    pub dora_indicators: Vec<Tile>,
+    pub ura_indicators: Vec<Tile>,
+    pub rinshan_tiles: Vec<Tile>,
+    pub filler_tiles: Vec<Tile>, // The remaining face-down tiles to maintain the 14 count
+}
+
+
 // components
 #[derive(Component)]
 struct PlayerTag;
@@ -105,6 +115,9 @@ struct ClosedHand;
 
 #[derive(Component)]
 struct Tenpai(Vec<Tile>);
+
+#[derive(Component)]
+struct Furiten;
 
 #[derive(Component)]
 struct Riichi {
@@ -200,7 +213,7 @@ struct HandResult {
 
 
 fn check_ryuukoku(wall: &Wall) -> bool {
-    wall.0.len() <= 14 // dead wall
+    wall.0.is_empty()
 }
 
 fn is_furiten(kawa: &Kawa, tenpai: &Tenpai) -> bool {
@@ -208,54 +221,39 @@ fn is_furiten(kawa: &Kawa, tenpai: &Tenpai) -> bool {
 }
 
 
-fn calculate_fu(
-    result: &[Mentsu],
-    jikaze: &Wind,
-    bakaze: &Wind,
-    is_tsumo: bool,
-    is_hand_closed: bool
-) -> u8 {
-    let mut fu: u8 = 20;
-
-    if is_tsumo {
-        fu += 2; // exception for pinfu tsumo later
-    } else if is_hand_closed {
-        fu += 10; // menzen ron
+fn get_dora_from_indicator(indicator: &Tile) -> Tile {
+    match indicator {
+        Tile::Man(num) => Tile::Man((num % 9) + 1),
+        Tile::Pin(num) => Tile::Pin((num % 9) + 1),
+        Tile::Sou(num) => Tile::Sou((num % 9) + 1),
+        Tile::Honor(Honor::East) => Tile::Honor(Honor::South),
+        Tile::Honor(Honor::South) => Tile::Honor(Honor::West),
+        Tile::Honor(Honor::West) => Tile::Honor(Honor::North),
+        Tile::Honor(Honor::North) => Tile::Honor(Honor::East),
+        Tile::Honor(Honor::White) => Tile::Honor(Honor::Green),
+        Tile::Honor(Honor::Green) => Tile::Honor(Honor::Red),
+        Tile::Honor(Honor::Red) => Tile::Honor(Honor::White),
     }
+}
 
-    for mentsu in result.iter() {
-        match mentsu {
-            Mentsu::Koutsu(tiles, true) => {
-                fu += if is_yaochuuhai(&tiles[0]) {8} else {4};
+
+fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool) -> u8 {
+    let mut additional_han = 0;
+    for tile in combined_hand.iter() {
+        for dora in dead_wall.dora_indicators.iter() {
+            if *tile == get_dora_from_indicator(dora) {
+                additional_han += 1 
             }
-            Mentsu::Koutsu(tiles, false) => {
-                fu += if is_yaochuuhai(&tiles[0]) {4} else {2};
-            }
-            Mentsu::Ankan(tiles) => {
-                fu += if is_yaochuuhai(&tiles[0]) {32} else {16};
-            }
-            Mentsu::Daiminkan(tiles) | Mentsu::Shouminkan(tiles) => {
-                fu += if is_yaochuuhai(&tiles[0]) {16} else {8};
-            }
-            Mentsu::Jantou(tiles) => {
-                let tile = &tiles[0];
-                if let Tile::Honor(Honor::Red | Honor::Green | Honor::White) = tile {
-                    fu += 2;
-                }
-                // these stack
-                if let Tile::Honor(h) = tile {
-                    if *h == wind_to_honor(jikaze) { fu += 2; }
-                    if *h == wind_to_honor(bakaze) { fu += 2; }
+        }
+        if is_riichi {
+            for ura in dead_wall.ura_indicators.iter() {
+                if *tile == get_dora_from_indicator(ura) {
+                    additional_han += 1 
                 }
             }
-            _ => {} // shuntsu
         }
     }
-
-    // TODO: wait fu (kanchan, penchan, tanki)
-    // TODO: round up to nearest 10
-
-    fu
+    additional_han
 }
 
 
@@ -278,6 +276,7 @@ fn evaluate_yaku(
     is_rinshan: bool,
     is_chankan: bool,
     wall: &Wall,
+    dead_wall: &DeadWall,
     calls_made: bool,
 ) -> HandResult {
     let mut best = HandResult {
@@ -319,6 +318,10 @@ fn evaluate_yaku(
         if is_better(&eval, &best) { 
             best = eval; 
         }
+    }
+
+    if !best.yaku_names.is_empty() && !best.is_yakuman {
+        best.total_han += count_dora(combined_hand, dead_wall, is_riichi)
     }
 
     best
@@ -490,7 +493,14 @@ fn evaluate_standard(
     // situational
     add_situational(&mut eval, is_hand_closed, is_riichi, is_double_riichi,
         is_ippatsu, is_tsumo, is_rinshan, is_chankan, wall);
-
+    
+    if eval.yaku_names.contains(&"Pinfu".to_string()) {
+        eval.total_fu = if is_tsumo { 20 } else { 30 };
+    } else {
+        let raw_fu = calculate_fu(result, winning_tile, jikaze, bakaze, is_tsumo, is_hand_closed);
+        eval.total_fu = raw_fu.div_ceil(10) * 10; //(raw_fu + 9) / 10 * 10;
+    }
+    
     eval
 }
 
@@ -650,6 +660,7 @@ fn can_declare_ron(
     bakaze: &Wind,
     jikaze: &Wind,
     wall: &Wall,
+    dead_wall: &DeadWall,
     is_chankan: bool,
     calls_made: bool,
 ) -> Option<HandResult> {
@@ -699,6 +710,7 @@ fn can_declare_ron(
         false,              // is_rinshan, ron is never rinshan
         is_chankan,          
         wall,
+        dead_wall,
         calls_made);
         
     if yaku_result.yaku_names.is_empty() {
@@ -714,7 +726,8 @@ fn declare_ron(
     mut messages: MessageReader<DeclareRonMessage>,
     query: Query<(&Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>)>,
     game: Res<GameState>,
-    wall: Res<Wall>
+    wall: Res<Wall>,
+    dead_wall: Res<DeadWall>,
 ) {
     for message in messages.read() {
         if let Ok((hand, open, tenpai, kawa, jikaze,
@@ -738,6 +751,7 @@ fn declare_ron(
                 &game.bakaze,
                 &jikaze.0,
                 &*wall, // what the fuck is this?
+                &*dead_wall,
                 message.is_chankan,
                 game.calls_made
             ) {
@@ -764,6 +778,7 @@ fn can_declare_tsumo(
     bakaze: &Wind,
     jikaze: &Wind,
     wall: &Wall,
+    dead_wall: &DeadWall,
     is_rinshan: bool,
     calls_made: bool,
 ) -> Option<HandResult> {
@@ -813,6 +828,7 @@ fn can_declare_tsumo(
         is_rinshan,              
         false,          // is_chankan, tsumo can't chankan
         wall,
+        dead_wall,
         calls_made);
     
     if yaku_result.yaku_names.is_empty() {
@@ -828,7 +844,8 @@ fn declare_tsumo(
     mut messages: MessageReader<DeclareTsumoMessage>,
     query: Query<(&Hand, &OpenMentsu, &Tenpai, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>, &Kawa)>,
     game: Res<GameState>,
-    wall: Res<Wall>
+    wall: Res<Wall>,
+    dead_wall: Res<DeadWall>,
 ) {
     for message in messages.read() {
         if let Ok((hand, open, tenpai, jikaze,
@@ -852,6 +869,7 @@ fn declare_tsumo(
                 &game.bakaze,
                 &jikaze.0,
                 &*wall,
+                &*dead_wall,
                 message.is_rinshan,
                 game.calls_made,
             ) {
@@ -868,8 +886,8 @@ fn check_tenpai(raw_hand: &[Tile]) -> Vec<Tile> {
     for tile in all_tiles() {
         let mut hand_speculated = raw_hand.to_owned();
         hand_speculated.push(tile);
-        hand_speculated.sort(); // ! idk if this should be here on in the gameplay loop (after every draw)
-         if !decompose(&hand_speculated).is_empty() {
+        hand_speculated.sort(); 
+         if !decompose(&hand_speculated).is_empty() || chiitoitsu(&hand_speculated) || kokushi_musou(&hand_speculated) {
             waiting_on.push(tile);
         }
     }
@@ -1284,6 +1302,7 @@ fn sanankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool, thirteen_til
         .iter()
         .filter(|mentsu| {
             if let Mentsu::Koutsu(tiles, true) | Mentsu::Ankan(tiles) = mentsu {
+                // compares result with thirteen tiles to see if the winning tile forms the final koutsu and doesn't come from ron 
                 !(tiles[0] == *winning_tile && !is_tsumo && thirteen_tiles.iter().filter(|x| *x == winning_tile).count() == 2)
             } else {
                 false
@@ -1526,30 +1545,18 @@ fn sanshoku_doukou(result: &[Mentsu]) -> bool {
 }
 
 
-fn chuuren_poutou(hand: &[Tile]) -> bool {
-    if hand.iter().all(|x| matches!(x, Tile::Man(_)))
-        || hand.iter().all(|x| matches!(x, Tile::Pin(_)))
-        || hand.iter().all(|x| matches!(x, Tile::Sou(_))) {
+fn chuuren_poutou(combined_hand: &[Tile]) -> bool {
+    if (combined_hand.len() == 14) 
+    && (combined_hand.iter().all(|x| matches!(x, Tile::Man(_)))
+        || combined_hand.iter().all(|x| matches!(x, Tile::Pin(_)))
+        || combined_hand.iter().all(|x| matches!(x, Tile::Sou(_)))) {
             for i in 1..=9 {
-                if !hand.contains(&Tile::Man(i)) && !hand.contains(&Tile::Pin(i)) && !hand.contains(&Tile::Sou(i)) {
+                if !combined_hand.contains(&Tile::Man(i)) && !combined_hand.contains(&Tile::Pin(i)) && !combined_hand.contains(&Tile::Sou(i)) {
                     return false;
                 }
             }
-            hand.iter().filter(|x| matches!(x, Tile::Man(1) | Tile::Pin(1) | Tile::Sou(1))).count() >= 3 
-                && hand.iter().filter(|x| matches!(x, Tile::Man(9) | Tile::Pin(9) | Tile::Sou(9))).count() >= 3 
-    } else {
-        false
-    }
-}
-
-
-fn is_ryanmen_wait(shuntsu_tiles: &[Tile], winning_tile: &Tile) -> bool {
-    if shuntsu_tiles[0] == *winning_tile {
-        // left machi (accepts 1/4)
-        !matches!(winning_tile, Tile::Man(7) | Tile::Pin(7) | Tile::Sou(7))
-    } else if shuntsu_tiles[2] == *winning_tile {
-        // right machi (accepts 6/9)
-        !matches!(winning_tile, Tile::Man(3) | Tile::Pin(3) | Tile::Sou(3))
+            combined_hand.iter().filter(|x| matches!(x, Tile::Man(1) | Tile::Pin(1) | Tile::Sou(1))).count() >= 3 
+                && combined_hand.iter().filter(|x| matches!(x, Tile::Man(9) | Tile::Pin(9) | Tile::Sou(9))).count() >= 3 
     } else {
         false
     }
@@ -1588,12 +1595,101 @@ fn pinfu(result: &[Mentsu], winning_tile: &Tile, jikaze: &Wind, bakaze: &Wind) -
 }
 
 
+fn is_ryanmen_wait(shuntsu_tiles: &[Tile], winning_tile: &Tile) -> bool {
+    if shuntsu_tiles[0] == *winning_tile {
+        // left machi (accepts 1/4)
+        !matches!(winning_tile, Tile::Man(7) | Tile::Pin(7) | Tile::Sou(7))
+    } else if shuntsu_tiles[2] == *winning_tile {
+        // right machi (accepts 6/9)
+        !matches!(winning_tile, Tile::Man(3) | Tile::Pin(3) | Tile::Sou(3))
+    } else {
+        false
+    }
+}
+
+fn is_penchan_wait(result: &[Mentsu], winning_tile: &Tile) -> bool {
+    result.iter().any(|mentsu| {
+    if let Mentsu::Shuntsu(tiles, _) = mentsu {
+        (tiles[0] == *winning_tile && is_terminal(&tiles[2])) || // 7 machi
+        (tiles[2] == *winning_tile && is_terminal(&tiles[0]))    // 3 machi
+    } else {
+        false
+    }
+    })
+}
+
+fn is_kanchan_wait(result: &[Mentsu], winning_tile: &Tile) -> bool {
+    result.iter().any(|mentsu| matches!(mentsu, Mentsu::Shuntsu(tiles, _) if tiles[1] == *winning_tile)) // 2 5 8
+}
+
+fn is_tanki_wait(result: &[Mentsu], winning_tile: &Tile) -> bool {
+    result.iter().any(|mentsu| matches!(mentsu, Mentsu::Jantou(tiles) if tiles[0] == *winning_tile))
+}
+
+
+fn calculate_fu(
+    result: &[Mentsu],
+    winning_tile: &Tile,
+    jikaze: &Wind,
+    bakaze: &Wind,
+    is_tsumo: bool,
+    is_hand_closed: bool
+) -> u8 {
+    let mut fu: u8 = 20;
+
+    if is_tsumo {
+        fu += 2; // exception for pinfu tsumo later
+    } else if is_hand_closed {
+        fu += 10; // menzen ron
+    }
+
+    for mentsu in result.iter() {
+        match mentsu {
+            Mentsu::Koutsu(tiles, true) => {
+                fu += if is_yaochuuhai(&tiles[0]) {8} else {4};
+            }
+            Mentsu::Koutsu(tiles, false) => {
+                fu += if is_yaochuuhai(&tiles[0]) {4} else {2};
+            }
+            Mentsu::Ankan(tiles) => {
+                fu += if is_yaochuuhai(&tiles[0]) {32} else {16};
+            }
+            Mentsu::Daiminkan(tiles) | Mentsu::Shouminkan(tiles) => {
+                fu += if is_yaochuuhai(&tiles[0]) {16} else {8};
+            }
+            Mentsu::Jantou(tiles) => {
+                let tile = &tiles[0];
+                if let Tile::Honor(Honor::Red | Honor::Green | Honor::White) = tile {
+                    fu += 2;
+                }
+                // these stack
+                if let Tile::Honor(h) = tile {
+                    if *h == wind_to_honor(jikaze) { 
+                        fu += 2; 
+                    }
+                    if *h == wind_to_honor(bakaze) { 
+                        fu += 2;
+                    }
+                }
+            }
+            _ => {} // shuntsu
+        }
+    }
+    //? wait a minute, i can just do `if !is_ryanmen`...???
+    if is_penchan_wait(result, winning_tile) || is_kanchan_wait(result, winning_tile) || is_tanki_wait(result, winning_tile) {
+        fu += 2;
+    }
+
+    fu
+}
+
+
 fn haitei(wall: &Wall, is_tsumo: bool) -> bool {
-    wall.0.len() == 14 && is_tsumo
+    wall.0.is_empty() && is_tsumo
 }
 
 fn houtei(wall: &Wall, is_tsumo: bool) -> bool {
-    wall.0.len() == 14 && !is_tsumo
+    wall.0.is_empty() && !is_tsumo
 }
 
 fn tenhou(kawa: &Kawa, is_oya: bool, is_tsumo: bool, calls_made: bool) -> bool {
@@ -1720,6 +1816,13 @@ fn start_game(
     let seats = [Wind::East, Wind::South, Wind::West, Wind::North];
     let mut starting_player = Entity::PLACEHOLDER;
 
+    commands.insert_resource(DeadWall {
+        dora_indicators: wall.drain(..1).collect(),
+        ura_indicators: wall.drain(..1).collect(),
+        rinshan_tiles: wall.drain(..4).collect(),
+        filler_tiles:wall.drain(..8).collect(),
+    });
+
     for &wind in &seats {
         let starting_hand: Vec<Tile> = wall.drain(wall.len() - 13..).collect();
         let mut player = commands.spawn((
@@ -1750,6 +1853,7 @@ fn start_game(
         }
     );
     commands.insert_resource(CurrentTurn(starting_player));
+    
     commands.insert_resource(Wall(wall));
     commands.insert_resource(CallWindowTimer(Timer::from_seconds(2.0, TimerMode::Once)));
     println!("ゲーム開始");
@@ -1760,11 +1864,18 @@ fn start_game(
 fn draw_tile(
     current_turn: Res<CurrentTurn>,
     mut wall: ResMut<Wall>,
+    mut query: Query<(Entity, Has<Furiten>, Has<Riichi>)>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>, // used to change the game phase
 ) {
     let drawn = wall.0.remove(0); 
     commands.entity(current_turn.0).insert(DrawnTile(drawn));
+
+    if let Ok((player, _, is_riichi)) = query.get(current_turn.0) 
+    && !is_riichi {
+            commands.entity(player).remove::<Furiten>();
+    }
+    
 
     next_state.set(TurnState::MainPhase);
 
@@ -1855,14 +1966,23 @@ fn call_window_timeout(
     time: Res<Time>, // built-in clock
     mut call_timer: ResMut<CallWindowTimer>,
     mut next_state: ResMut<NextState<TurnState>>,
-    tile_query: Single<Entity, With<CurrentDiscard>>,
+    tile_query: Single<(Entity, &DiscardedTile), With<CurrentDiscard>>,
+    furiten_check: Query<(Entity, &Tenpai)>,
     mut commands: Commands
 ) {
-    
+    // this shouldn't be a timer later, but a declare confirmation
     call_timer.0.tick(time.delta());
 
     if call_timer.0.just_finished() {
-        commands.entity(*tile_query).remove::<CurrentDiscard>();
+        let (discard_entity, discarded_tile) = *tile_query;
+
+        for (player, tenpai) in furiten_check {
+            if tenpai.0.contains(&discarded_tile.0) {
+                commands.entity(player).insert(Furiten);
+            }
+        }
+
+        commands.entity(discard_entity).despawn();
         next_state.set(TurnState::AdvanceTurn);
         call_timer.0.reset();
     }
