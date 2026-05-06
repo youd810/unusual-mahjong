@@ -77,7 +77,8 @@ struct GameState {
     bullet: u8,
     calls_made: bool,  // ! IMPORTANT: removed after the first call
     riichi_points: u32,
-    pending_kan_dora: bool
+    pending_kan_dora: bool,
+    pending_rinshan: bool,
 }
 
 #[derive(Resource)]
@@ -213,6 +214,13 @@ struct HandResult {
     is_yakuman: bool,
 }
 
+#[derive(Debug)]
+struct ScorePayout {
+    pub total_won: u32,
+    pub oya_pays: u32,
+    pub non_oya_pays: u32,
+}
+
 
 fn check_ryuukoku(wall: &Wall) -> bool {
     wall.0.is_empty()
@@ -256,6 +264,86 @@ fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool) -> 
         }
     }
     additional_han
+}
+
+
+fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman: bool, yaku_names: Vec<String>) -> ScorePayout {
+    if is_yakuman {
+        if is_oya { 
+            if is_tsumo {
+                return ScorePayout {
+                    total_won: (yaku_names.len() * 48000) as u32,
+                    oya_pays: 0,
+                    non_oya_pays: (yaku_names.len() * 48000 / 3) as u32,
+                }; 
+            } else {
+                return ScorePayout {
+                    total_won: (yaku_names.len() * 48000) as u32,
+                    oya_pays: 0,
+                    non_oya_pays: (yaku_names.len() * 48000) as u32,
+                };
+            }
+        } else { 
+            if is_tsumo {
+                return ScorePayout {
+                    total_won: (yaku_names.len() * 32000) as u32,
+                    oya_pays: (yaku_names.len() * 32000 / 2) as u32,
+                    non_oya_pays: ((yaku_names.len() * 32000 / 2) / 2) as u32,
+                }; 
+            } else {
+                return ScorePayout {
+                    total_won: (yaku_names.len() * 32000) as u32,
+                    oya_pays: (yaku_names.len() * 32000) as u32,
+                    non_oya_pays: (yaku_names.len() * 32000) as u32,
+                }; 
+            }
+           
+        } 
+    }
+
+    // https://riichi.wiki/Japanese_mahjong_scoring_rules
+    let mut base: u32 = fu as u32 * 2_u32.pow((han + 2).into());
+
+    if base > 2000 || han > 5 || (han >= 4 && fu >= 40) || (han >= 3 && fu >= 70) {
+        match han {
+            3..=5 => base = 2000,
+            6..=7 => base = 3000,
+            8..=9 => base = 4000,
+            10..=12 => base = 6000,
+            _ => base = 8000,
+        }
+    }
+
+    if is_oya && is_tsumo {
+        let non_oya_payout = (base * 2).div_ceil(100) * 100;
+        ScorePayout{
+            total_won: non_oya_payout * 3,
+            oya_pays: 0,
+            non_oya_pays: non_oya_payout,
+        }
+    } else if is_oya && !is_tsumo {
+        let ron_payout = (base * 6).div_ceil(100) * 100;
+        ScorePayout{
+            total_won: ron_payout,
+            oya_pays: 0,
+            non_oya_pays: ron_payout,
+        }
+    } else if  !is_oya && is_tsumo {
+        let oya_payout = (base * 2).div_ceil(100) * 100;
+        let non_oya_payout = base.div_ceil(100) * 100;
+        ScorePayout{
+            total_won: oya_payout + (non_oya_payout * 2),
+            oya_pays: oya_payout,
+            non_oya_pays: non_oya_payout,
+        }
+    } else {
+        let ron_payout = (base * 4).div_ceil(100) * 100;
+        ScorePayout{
+            total_won: ron_payout,
+            oya_pays: ron_payout,
+            non_oya_pays: ron_payout,
+        }
+    }
 }
 
 
@@ -726,14 +814,16 @@ fn can_declare_ron(
 
 fn declare_ron(
     mut messages: MessageReader<DeclareRonMessage>,
-    query: Query<(&Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>)>,
-    game: Res<GameState>,
+    mut query: Query<(&Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>)>,
+    mut points_query: Query<&mut Points>,
+    mut game: ResMut<GameState>,
     wall: Res<Wall>,
     dead_wall: Res<DeadWall>,
 ) {
     for message in messages.read() {
+
         if let Ok((hand, open, tenpai, kawa, jikaze,
-            is_closed, is_oya, maybe_riichi)) = query.get(message.player)
+            is_closed, is_oya, maybe_riichi)) = query.get_mut(message.player)
         {
             let is_riichi = maybe_riichi.is_some();
             let is_double = maybe_riichi.is_some_and(|r| r.is_double);
@@ -757,8 +847,27 @@ fn declare_ron(
                 message.is_chankan,
                 game.calls_made
             ) {
-                // !score and  transfer points
                 // !should take the yaku list vector also?
+
+                let score = calculate_score(
+                    yaku_result.total_han, 
+                    yaku_result.total_fu, 
+                    is_oya, 
+                    false, 
+                    yaku_result.is_yakuman, 
+                    yaku_result.yaku_names
+                );
+
+                if let Ok([mut winner_points, mut loser_points]) = points_query.get_many_mut([message.player, message.discarded_by]) {
+                    winner_points.0 += score.total_won as i32;
+                    loser_points.0 -= score.total_won as i32;
+                    
+                    winner_points.0 += game.riichi_points as i32;
+                    game.riichi_points = 0;
+                    game.pending_rinshan = false;
+
+                }
+
             }
         }
     }
@@ -845,7 +954,8 @@ fn can_declare_tsumo(
 fn declare_tsumo(
     mut messages: MessageReader<DeclareTsumoMessage>,
     query: Query<(&Hand, &OpenMentsu, &Tenpai, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>, &Kawa)>,
-    game: Res<GameState>,
+    mut points_query: Query<(Entity, &mut Points, Has<Oya>)>,
+    mut game: ResMut<GameState>,
     wall: Res<Wall>,
     dead_wall: Res<DeadWall>,
 ) {
@@ -875,7 +985,31 @@ fn declare_tsumo(
                 message.is_rinshan,
                 game.calls_made,
             ) {
-                // !score and  transfer points
+                // !yaku names
+
+                let score = calculate_score(
+                    yaku_result.total_han, 
+                    yaku_result.total_fu, 
+                    is_oya, 
+                    true, 
+                    yaku_result.is_yakuman, 
+                    yaku_result.yaku_names
+                );
+
+                for (player, mut player_points, is_dealer) in points_query.iter_mut() {
+                    if player != message.player {
+                        if is_dealer {
+                            player_points.0 -= score.oya_pays as i32;
+                        } else  {
+                            player_points.0 -= score.non_oya_pays as i32;
+                        }
+                    }  else {
+                        player_points.0 += score.total_won as i32;
+                        player_points.0 += game.riichi_points as i32;
+                        game.riichi_points = 0;
+                    }
+                }
+
             }
         }
     }
@@ -1132,6 +1266,13 @@ fn can_declare_kan_from_pon(open_mentsu: &[Mentsu], tile: &Tile) -> bool{
     }) 
 }
 
+#[derive(PartialEq)]
+enum Kantsu {
+    Ankan,
+    Daiminkan,
+    Shouminkan,
+}
+
 
 fn declare_kan(
     mut messages: MessageReader<DeclareKanMessage>,
@@ -1148,13 +1289,13 @@ fn declare_kan(
         if let Ok((mut hand, mut open_mentsu, _)) = query.get_mut(message.player){
             let tile = &message.tile;
             let count = can_declare_kan_from_hand(&hand.0, tile);
-            let mut is_kan_successful = false;
+            let mut kan_successful_type: Option<Kantsu> = None;
             if message.is_discard && count == 3 {
                 open_mentsu.0.push(Mentsu::Daiminkan(vec![*tile; 4]));
                 hand.0.retain(|x| x != tile);
                 commands.entity(*tile_query).despawn(); 
                 commands.entity(message.player).remove::<ClosedHand>(); 
-                is_kan_successful = true;
+                kan_successful_type = Some(Kantsu::Daiminkan);
                 game.pending_kan_dora = true;
             } 
             else if !message.is_discard && count == 4 {
@@ -1165,7 +1306,7 @@ fn declare_kan(
                 dead_wall.dora_indicators.push(new_dora);
                 dead_wall.ura_indicators.push(new_ura);
                 hand.0.retain(|x| x != tile);
-                is_kan_successful = true;
+                kan_successful_type = Some(Kantsu::Ankan);
             }  
             else if !message.is_discard { // this check should be enough hopefully
                 for mentsu in &mut open_mentsu.0 {
@@ -1173,14 +1314,20 @@ fn declare_kan(
                         // deref to mutate
                         *mentsu = Mentsu::Shouminkan(vec![*tile; 4]);
                         hand.0.retain(|x| x != tile);
-                        is_kan_successful = true;
+                        kan_successful_type = Some(Kantsu::Shouminkan);
                         game.pending_kan_dora = true;
+                        game.pending_rinshan = true;
+                        commands.spawn((
+                            CurrentDiscard,
+                            DiscardedTile(*tile),
+                            DiscardedBy(message.player),
+                        ));
                         break;
                     } 
                 }
             }
 
-            if is_kan_successful {
+            if kan_successful_type == Some(Kantsu::Ankan) || kan_successful_type == Some(Kantsu::Daiminkan)  {
                 game.calls_made = true;
                 for (_, _, mut maybe_riichi) in query.iter_mut() {
                     if let Some(riichi) = maybe_riichi.as_deref_mut() {
@@ -1189,6 +1336,15 @@ fn declare_kan(
                 }
                 current_turn.0 = message.player;
                 next_state.set(TurnState::RinshanDraw);
+                timer.0.reset();
+            } else if kan_successful_type == Some(Kantsu::Shouminkan) {
+                 for (_, _, mut maybe_riichi) in query.iter_mut() {
+                    if let Some(riichi) = maybe_riichi.as_deref_mut() {
+                        riichi.is_ippatsu_alive = false;
+                    }
+                }
+                current_turn.0 = message.player;
+                next_state.set(TurnState::CallWindow);
                 timer.0.reset();
             }
         }
@@ -1870,6 +2026,7 @@ fn start_game(
             calls_made: false,
             riichi_points: 0,
             pending_kan_dora: false,
+            pending_rinshan: false,
         }
     );
     commands.insert_resource(CurrentTurn(starting_player));
@@ -2010,13 +2167,14 @@ fn auto_discard_bot(
 
 fn call_window_timeout(
     time: Res<Time>, // built-in clock
+    mut game: ResMut<GameState>,
     mut call_timer: ResMut<CallWindowTimer>,
     mut next_state: ResMut<NextState<TurnState>>,
     tile_query: Single<(Entity, &DiscardedTile), With<CurrentDiscard>>,
     furiten_check: Query<(Entity, &Tenpai)>,
     mut commands: Commands
 ) {
-    // this shouldn't be a timer later, but a declare confirmation
+    // this shouldn't be a timer later, but a declare confirmation (no?)
     call_timer.0.tick(time.delta());
 
     if call_timer.0.just_finished() {
@@ -2029,7 +2187,13 @@ fn call_window_timeout(
         }
 
         commands.entity(discard_entity).despawn();
-        next_state.set(TurnState::AdvanceTurn);
+
+        if game.pending_rinshan {
+            next_state.set(TurnState::RinshanDraw);
+            game.pending_rinshan = false;
+        } else {
+            next_state.set(TurnState::AdvanceTurn);
+        }
         call_timer.0.reset();
     }
 }
