@@ -76,6 +76,8 @@ struct GameState {
     bakaze: Wind,
     bullet: u8,
     calls_made: bool,  // ! IMPORTANT: removed after the first call
+    riichi_points: u32,
+    pending_kan_dora: bool
 }
 
 #[derive(Resource)]
@@ -924,9 +926,16 @@ fn combine_tiles(hand: &Hand, open_mentsu: &OpenMentsu) -> Vec<Tile> {
     result
 }
 
-fn tenpai_payout_system(mut query: Query<&mut Points, With<Tenpai>>) {
-    for mut player_points in &mut query {
-        player_points.0 += 1000;
+fn tenpai_payout_system(mut query: Query<(&mut Points, Has<Tenpai>)>) {
+    let tenpai_count = query.iter().filter(|(_, is_tenpai)| *is_tenpai).count();
+
+    for (mut player_points, is_tenpai) in query.iter_mut() {
+        match tenpai_count {
+            1 => if is_tenpai { player_points.0 += 3000 } else { player_points.0 -= 1000 },
+            2 => if is_tenpai { player_points.0 += 1500 } else { player_points.0 -= 1500 },
+            3 => if is_tenpai { player_points.0 += 1000 } else { player_points.0 -= 3000 },
+            _ => {}
+        }
     }
 }
 
@@ -944,7 +953,7 @@ fn declare_riichi(
     mut messages: MessageReader<DeclareRiichiMessage>, // store the entity id
     mut query: Query<(Has<ClosedHand>, Has<Riichi>, &Hand, &mut Points, &Kawa)>, // store the data
     wall: Res<Wall>,
-    game: Res<GameState>,
+    mut game: ResMut<GameState>,
     mut commands: Commands,
 ) {
     for message in messages.read() {
@@ -956,6 +965,7 @@ fn declare_riichi(
                     is_ippatsu_alive: true, 
                     turns_since: 0 });
                 points.0 -= 1000;
+                game.riichi_points += 1000;
             }
     }
 }
@@ -1126,8 +1136,9 @@ fn can_declare_kan_from_pon(open_mentsu: &[Mentsu], tile: &Tile) -> bool{
 fn declare_kan(
     mut messages: MessageReader<DeclareKanMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&mut Riichi>)>,
-    mut tile_query: Single<Entity, With<CurrentDiscard>>,
+    tile_query: Single<Entity, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
+    mut dead_wall: ResMut<DeadWall>,
     mut timer: ResMut<CallWindowTimer>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
@@ -1144,9 +1155,15 @@ fn declare_kan(
                 commands.entity(*tile_query).despawn(); 
                 commands.entity(message.player).remove::<ClosedHand>(); 
                 is_kan_successful = true;
+                game.pending_kan_dora = true;
             } 
             else if !message.is_discard && count == 4 {
                 open_mentsu.0.push(Mentsu::Ankan(vec![*tile; 4]));
+                // dora flipping timing 
+                let new_dora = dead_wall.filler_tiles.remove(0);
+                let new_ura =  dead_wall.filler_tiles.remove(0);
+                dead_wall.dora_indicators.push(new_dora);
+                dead_wall.ura_indicators.push(new_ura);
                 hand.0.retain(|x| x != tile);
                 is_kan_successful = true;
             }  
@@ -1157,6 +1174,7 @@ fn declare_kan(
                         *mentsu = Mentsu::Shouminkan(vec![*tile; 4]);
                         hand.0.retain(|x| x != tile);
                         is_kan_successful = true;
+                        game.pending_kan_dora = true;
                         break;
                     } 
                 }
@@ -1850,6 +1868,8 @@ fn start_game(
             bakaze: Wind::East, 
             bullet: 1,
             calls_made: false,
+            riichi_points: 0,
+            pending_kan_dora: false,
         }
     );
     commands.insert_resource(CurrentTurn(starting_player));
@@ -1883,11 +1903,30 @@ fn draw_tile(
 }
 
 
+fn rinshan_draw(
+    current_turn: Res<CurrentTurn>,
+    mut wall: ResMut<Wall>,
+    mut dead_wall: ResMut<DeadWall>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>,
+) {
+    let drawn = dead_wall.rinshan_tiles.remove(0);
+
+    commands.entity(current_turn.0).insert(DrawnTile(drawn));
+
+    dead_wall.filler_tiles.push(wall.0.pop().unwrap());
+
+    next_state.set(TurnState::MainPhase);
+}
+
+
 fn discard_tile(
     mut messages: MessageReader<DiscardTileMessage>,
     mut query: Query<(&mut Hand, &mut DrawnTile, &mut Kawa)>,
     mut commands: Commands,
-    mut next_state: ResMut<NextState<TurnState>>
+    mut next_state: ResMut<NextState<TurnState>>,
+    mut game: ResMut<GameState>,
+    mut dead_wall: ResMut<DeadWall>
 ) {
     for message in messages.read() {
         if let Ok((mut hand, drawn, mut kawa)) =  query.get_mut(message.player) {
@@ -1908,6 +1947,14 @@ fn discard_tile(
                 DiscardedTile(message.tile),
                 DiscardedBy(message.player),
             ));
+
+            if game.pending_kan_dora {
+                let new_dora = dead_wall.filler_tiles.remove(0);
+                let new_ura =  dead_wall.filler_tiles.remove(0);
+                dead_wall.dora_indicators.push(new_dora);
+                dead_wall.ura_indicators.push(new_ura);
+                game.pending_kan_dora = false;
+            }
 
             next_state.set(TurnState::CallWindow);
 
@@ -1930,7 +1977,6 @@ fn next_turn(
     mut current_turn: ResMut<CurrentTurn>,
     mut query: Query<(Entity, &Jikaze)>,
     mut next_state: ResMut<NextState<TurnState>>,
-    mut game: ResMut<GameState>
 ) {
     if let Ok((_, current_jikaze)) = query.get_mut(current_turn.0){
         let next_jikaze = next_turn_wind(&current_jikaze.0);
@@ -2012,6 +2058,6 @@ fn main() {
         .run();
 
 
-    // TODO: logical sorting when player picks up a tile
+    // TODO: logical sorting when player picks up a tile (or not?)
     
 }
