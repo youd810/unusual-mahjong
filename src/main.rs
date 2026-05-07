@@ -59,13 +59,26 @@ enum ChiTilePos { // tile drawn/discarded
 #[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash)]
 enum TurnState {
     #[default]
-    Setup,          
+    Setup,
+    StartNewRound,      
     Draw,           
     MainPhase,      
     CallWindow,     
     AdvanceTurn,   
     RinshanDraw,
+    RoundEnd,
 }
+
+enum RoundEndReason {
+    OyaWin,             // renchan
+    NonOyaWin,
+    RyuukyokuOyaTenpai, // renchan
+    RyuuukyokuOyaNoten,
+}
+
+#[derive(Resource)]
+struct RoundResult(RoundEndReason);
+
 
 #[derive(Resource)]
 struct CurrentTurn(Entity); // id of the current tsumo
@@ -73,6 +86,7 @@ struct CurrentTurn(Entity); // id of the current tsumo
 #[derive(Resource)]
 struct GameState {
     rounds: u8,
+    honba: u8,
     bakaze: Wind,
     bullet: u8,
     calls_made: bool,  // ! IMPORTANT: removed after the first call
@@ -222,8 +236,20 @@ struct ScorePayout {
 }
 
 
-fn check_ryuukoku(wall: &Wall) -> bool {
-    wall.0.is_empty()
+fn check_ryuukyoku(
+    oya_tenpai_query: Single<Has<Tenpai>, With<Oya>>,
+    wall: Res<Wall>, 
+    mut next_state: ResMut<NextState<TurnState>>,
+    mut commands: Commands,
+) {
+    if wall.0.is_empty() {
+        if *oya_tenpai_query {
+            commands.insert_resource(RoundResult(RoundEndReason::RyuukyokuOyaTenpai));
+        } else {
+            commands.insert_resource(RoundResult(RoundEndReason::RyuuukyokuOyaNoten))
+        }
+        next_state.set(TurnState::RoundEnd);
+    }
 }
 
 fn is_furiten(kawa: &Kawa, tenpai: &Tenpai) -> bool {
@@ -819,6 +845,8 @@ fn declare_ron(
     mut game: ResMut<GameState>,
     wall: Res<Wall>,
     dead_wall: Res<DeadWall>,
+    mut next_state: ResMut<NextState<TurnState>>,
+    mut commands: Commands,
 ) {
     for message in messages.read() {
 
@@ -865,7 +893,14 @@ fn declare_ron(
                     winner_points.0 += game.riichi_points as i32;
                     game.riichi_points = 0;
                     game.pending_rinshan = false;
+                    
+                    if is_oya {
+                        commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
+                    } else {
+                        commands.insert_resource(RoundResult(RoundEndReason::NonOyaWin));
+                    }
 
+                    next_state.set(TurnState::RoundEnd);
                 }
 
             }
@@ -958,6 +993,8 @@ fn declare_tsumo(
     mut game: ResMut<GameState>,
     wall: Res<Wall>,
     dead_wall: Res<DeadWall>,
+    mut next_state: ResMut<NextState<TurnState>>,
+    mut commands: Commands,
 ) {
     for message in messages.read() {
         if let Ok((hand, open, tenpai, jikaze,
@@ -1010,6 +1047,13 @@ fn declare_tsumo(
                     }
                 }
 
+                if is_oya {
+                    commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
+                } else {
+                    commands.insert_resource(RoundResult(RoundEndReason::NonOyaWin));
+                }
+
+                next_state.set(TurnState::RoundEnd);
             }
         }
     }
@@ -1290,6 +1334,7 @@ fn declare_kan(
             let tile = &message.tile;
             let count = can_declare_kan_from_hand(&hand.0, tile);
             let mut kan_successful_type: Option<Kantsu> = None;
+
             if message.is_discard && count == 3 {
                 open_mentsu.0.push(Mentsu::Daiminkan(vec![*tile; 4]));
                 hand.0.retain(|x| x != tile);
@@ -1298,6 +1343,7 @@ fn declare_kan(
                 kan_successful_type = Some(Kantsu::Daiminkan);
                 game.pending_kan_dora = true;
             } 
+
             else if !message.is_discard && count == 4 {
                 open_mentsu.0.push(Mentsu::Ankan(vec![*tile; 4]));
                 // dora flipping timing 
@@ -1308,6 +1354,7 @@ fn declare_kan(
                 hand.0.retain(|x| x != tile);
                 kan_successful_type = Some(Kantsu::Ankan);
             }  
+
             else if !message.is_discard { // this check should be enough hopefully
                 for mentsu in &mut open_mentsu.0 {
                     if let Mentsu::Koutsu(tiles, false) = mentsu && tiles[0] == *tile {
@@ -2020,7 +2067,8 @@ fn start_game(
 
     commands.insert_resource(
         GameState { 
-            rounds: 0,  
+            rounds: 1,  
+            honba: 0,
             bakaze: Wind::East, 
             bullet: 1,
             calls_made: false,
@@ -2199,6 +2247,96 @@ fn call_window_timeout(
 }
 
 
+fn start_round(
+    query: Query<&mut Hand>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>
+) {
+    let mut wall = vec![];
+    for _ in 0..4 {
+        wall.extend(all_tiles());
+    }
+    wall.shuffle(&mut rand::rng());
+
+    commands.insert_resource(DeadWall {
+        dora_indicators: wall.drain(..1).collect(),
+        ura_indicators: wall.drain(..1).collect(),
+        rinshan_tiles: wall.drain(..4).collect(),
+        filler_tiles:wall.drain(..8).collect(),
+    });
+
+    for mut hand in query {
+        let starting_hand: Vec<Tile> = wall.drain(wall.len() - 13..).collect();
+        hand.0 = starting_hand;
+    }
+
+    commands.insert_resource(Wall(wall));
+    next_state.set(TurnState::Draw);
+}
+
+fn next_round_wind(jikaze: &Wind) -> Wind {
+    match jikaze {
+        Wind::East => Wind::North,
+        Wind::South => Wind::East,
+        Wind::West =>  Wind::South,
+        Wind::North => Wind::West,
+    }
+}
+
+fn round_cleanup(
+    mut query: Query<(Entity, &mut Jikaze, Has<Oya>)>,
+    tile_query: Query<Entity, With<DiscardedTile>>,
+    mut player_query: Query<(Entity, &mut Hand, &mut OpenMentsu, &mut Kawa)>,
+    result: Res<RoundResult>,
+    mut game: ResMut<GameState>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>,
+) {
+    match result.0 {
+        RoundEndReason::OyaWin | RoundEndReason::RyuukyokuOyaTenpai => {game.honba += 1},
+        RoundEndReason::NonOyaWin | RoundEndReason::RyuuukyokuOyaNoten => { 
+            if game.bakaze == Wind::East && game.rounds == 4 {
+                game.bakaze = Wind::South;
+                game.rounds = 1;
+            } else {
+                game.rounds += 1;
+            }
+
+            for (player, mut jikaze, is_oya) in query.iter_mut() {
+                jikaze.0 = next_round_wind(&jikaze.0);
+
+                if is_oya {
+                    commands.entity(player).remove::<Oya>();
+                }
+                if jikaze.0 == Wind::East {
+                    commands.entity(player).insert(Oya);
+                    commands.insert_resource(CurrentTurn(player));
+                }
+            }
+         },
+    }
+
+    for tile in tile_query.iter() {
+        commands.entity(tile).despawn();
+    }
+
+    for (player, mut hand, mut open_mentsu, mut kawa) in player_query {
+        hand.0.clear();
+        open_mentsu.0.clear();
+        kawa.0.clear();
+
+        commands.entity(player).remove::<Tenpai>();
+        commands.entity(player).remove::<Riichi>();
+        commands.entity(player).remove::<Furiten>();
+        commands.entity(player).remove::<DrawnTile>();
+
+        commands.entity(player).insert(ClosedHand);
+    }
+
+    commands.remove_resource::<RoundResult>();
+    next_state.set(TurnState::StartNewRound);
+}
+
 fn main() {
 
     App::new()
@@ -2212,13 +2350,16 @@ fn main() {
         .add_message::<DeclareRonMessage>()
         .add_message::<DeclareTsumoMessage>()
         .add_systems(OnEnter(TurnState::Setup), start_game)
+        .add_systems(OnEnter(TurnState::StartNewRound), start_round)
         .add_systems(OnEnter(TurnState::Draw), draw_tile)
         .add_systems(Update, (
             auto_discard_bot,
             discard_tile, 
         ).run_if(in_state(TurnState::MainPhase)))
+        .add_systems(OnEnter(TurnState::MainPhase), check_ryuukyoku)
         .add_systems(Update, call_window_timeout.run_if(in_state(TurnState::CallWindow)))
         .add_systems(OnEnter(TurnState::AdvanceTurn), next_turn)
+        .add_systems(OnEnter(TurnState::RoundEnd), round_cleanup)
         .run();
 
 
