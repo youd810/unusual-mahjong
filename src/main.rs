@@ -1,7 +1,7 @@
 // TODO remaining todos
 // Dora counting (not a yaku but affects scoring) (Done?)
 // Fu calculation (done?)
-// Han → Score conversion table
+// Han → Score conversion table (done?)
 // custom yaku and rules later
 // ? 途中流局
 
@@ -73,7 +73,8 @@ enum RoundEndReason {
     OyaWin,             // renchan
     NonOyaWin,
     RyuukyokuOyaTenpai, // renchan
-    RyuuukyokuOyaNoten,
+    RyuukyokuOyaNoten,
+    TochuuRyuukyoku,
 }
 
 #[derive(Resource)]
@@ -207,6 +208,11 @@ struct DeclareTsumoMessage {
     is_rinshan: bool,
 }
 
+#[derive(Message)]
+struct DeclareKyuushuMessage {
+    player: Entity,
+}
+
 #[derive(Component)]
 struct DrawnTile(Tile);
 
@@ -246,7 +252,7 @@ fn check_ryuukyoku(
         if *oya_tenpai_query {
             commands.insert_resource(RoundResult(RoundEndReason::RyuukyokuOyaTenpai));
         } else {
-            commands.insert_resource(RoundResult(RoundEndReason::RyuuukyokuOyaNoten))
+            commands.insert_resource(RoundResult(RoundEndReason::RyuukyokuOyaNoten))
         }
         next_state.set(TurnState::RoundEnd);
     }
@@ -1116,6 +1122,95 @@ fn tenpai_payout_system(mut query: Query<(&mut Points, Has<Tenpai>)>) {
         }
     }
 }
+
+
+fn can_declare_kyuushu(hand: &[Tile], calls_made: bool, kawa: &Kawa) -> bool {
+    let mut yaochuuhai: Vec<&Tile> = hand.iter().filter(|x| is_yaochuuhai(x)).collect();
+    yaochuuhai.dedup();
+    yaochuuhai.len() >= 9 && !calls_made && kawa.0.is_empty()
+}
+
+fn declare_kyuushu(
+    mut messages: MessageReader<DeclareKyuushuMessage>,
+    query: Query<(&Hand, &Kawa, &DrawnTile)>,
+    game: Res<GameState>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>
+) {
+    for message in messages.read() {
+
+        if let Ok((hand, kawa, drawn)) = query.get(message.player) {
+            let mut combined = hand.0.to_owned();
+            combined.push(drawn.0.to_owned());
+            if can_declare_kyuushu(&combined, game.calls_made, kawa) {
+                commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
+                next_state.set(TurnState::RoundEnd);
+            }
+        }
+    }
+}
+
+
+fn suufon_renda(
+    game: Res<GameState>,
+    query: Query<&Kawa>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>
+) {
+    if !game.calls_made {
+        let four_kawa: Vec<&Kawa> = query.iter().collect();
+
+        if four_kawa.iter().all(|kawa| kawa.0.len() == 1) {
+            let first_tile = four_kawa[0].0[0];
+            if matches!(first_tile, Tile::Honor(Honor::East | Honor::South | Honor::West | Honor::North))
+                && four_kawa.iter().all(|kawa| kawa.0[0] == first_tile)
+            {
+                commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
+                next_state.set(TurnState::RoundEnd);
+            }
+        }
+    }
+}
+
+
+fn suucha_riichi(
+    query: Query<&Riichi>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>
+) {
+    if query.count() == 4 {
+        commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
+        next_state.set(TurnState::RoundEnd);
+    }
+}
+
+
+fn suukaikan(
+    query: Query<&OpenMentsu>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>,
+) {
+    let mut total_kan = 0;
+    let mut players_with_kan = 0;
+
+    for open in query.iter() {
+        let kan = open.0.iter()
+            .filter(|mentsu| matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_)))
+            .count();
+
+        if kan > 0 {
+            players_with_kan += 1;
+        }
+        total_kan += kan;
+    }
+
+    if total_kan >= 4 && players_with_kan > 1 {
+        commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
+        next_state.set(TurnState::RoundEnd);
+    }
+}
+
+// TODO: Sanchahou
 
 
 fn can_declare_riichi(hand: &[Tile], is_closed: bool, is_riichi: bool, points: i32, wall: &Wall) -> bool {
@@ -2293,8 +2388,8 @@ fn round_cleanup(
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
     match result.0 {
-        RoundEndReason::OyaWin | RoundEndReason::RyuukyokuOyaTenpai => {game.honba += 1},
-        RoundEndReason::NonOyaWin | RoundEndReason::RyuuukyokuOyaNoten => { 
+        RoundEndReason::OyaWin | RoundEndReason::RyuukyokuOyaTenpai | RoundEndReason::TochuuRyuukyoku => {game.honba += 1},
+        RoundEndReason::NonOyaWin | RoundEndReason::RyuukyokuOyaNoten => { 
             if game.bakaze == Wind::East && game.rounds == 4 {
                 game.bakaze = Wind::South;
                 game.rounds = 1;
