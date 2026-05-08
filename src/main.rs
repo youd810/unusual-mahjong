@@ -193,19 +193,33 @@ struct DeclareRiichiMessage {
     player: Entity,       
 }
 
+// for ron
+#[derive(Component)]
+struct Chankan;
+
+//
+#[derive(Component)]
+struct RonOption {
+    discarded_by: Entity,
+    result: HandResult,
+}
+
 #[derive(Message)]
 struct DeclareRonMessage {
     player: Entity,
-    discard_tile: Tile,
     discarded_by: Entity,
-    is_chankan: bool,
+    result: HandResult,
+}
+
+#[derive(Component)]
+struct TsumoOption {
+    result: HandResult,
 }
 
 #[derive(Message)]
 struct DeclareTsumoMessage {
     player: Entity,
-    drawn_tile: Tile,
-    is_rinshan: bool,
+    result: HandResult,
 }
 
 #[derive(Message)]
@@ -226,7 +240,7 @@ struct DiscardTileMessage {
 #[derive(Resource)]
 struct CallWindowTimer(Timer);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct HandResult {
     yaku_names: Vec<String>,
     total_han: u8,
@@ -299,7 +313,7 @@ fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool) -> 
 }
 
 
-fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman: bool, yaku_names: Vec<String>) -> ScorePayout {
+fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman: bool, yaku_names: &[String]) -> ScorePayout {
     if is_yakuman {
         if is_oya { 
             if is_tsumo {
@@ -844,73 +858,127 @@ fn can_declare_ron(
 }
 
 
-fn declare_ron(
-    mut messages: MessageReader<DeclareRonMessage>,
-    mut query: Query<(&Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>)>,
-    mut points_query: Query<&mut Points>,
-    mut game: ResMut<GameState>,
+// TODO: multiple ron
+// runs once upon entering CallWindow 
+fn ron_check(
+    query: Query<(Entity, &Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>,)>,
+    discard_query: Query<(&DiscardedTile, &DiscardedBy, Has<Chankan>), With<CurrentDiscard>>,
+    game: Res<GameState>,
     wall: Res<Wall>,
     dead_wall: Res<DeadWall>,
+    mut commands: Commands,
+) {
+    let Ok((discarded_tile, discarded_by, is_chankan)) = discard_query.single() else {
+        return;
+    };
+
+    for (player, hand, open_mentsu, tenpai, kawa, jikaze,
+         is_closed, is_oya, maybe_riichi) in &query
+    {
+        if player == discarded_by.0 { continue; }
+
+        let is_riichi = maybe_riichi.is_some();
+        let is_double = maybe_riichi.is_some_and(|r| r.is_double);
+        let is_ippatsu = maybe_riichi.is_some_and(|r| r.is_ippatsu_alive);
+
+        if let Some(result) = can_declare_ron(
+            &discarded_tile.0, 
+            &hand.0, 
+            &open_mentsu.0, 
+            tenpai,
+            is_closed, 
+            is_oya, 
+            kawa,
+            is_riichi, 
+            is_double, 
+            is_ippatsu,
+            &game.bakaze, 
+            &jikaze.0,
+            &*wall, 
+            &*dead_wall,
+            is_chankan, 
+            game.calls_made,
+        ) {
+            commands.entity(player).insert(RonOption {
+                discarded_by: discarded_by.0,
+                result,
+            });
+        }
+    }
+}
+
+
+// reads RonOption, shows button, sends message on click
+// TODO:  the actual ui
+fn ron_ui_system(
+    query: Query<(Entity, &RonOption)>,
+    mut messages: MessageWriter<DeclareRonMessage>,
+    // ! + ui input stuff later
+) {
+    for (entity, ron_option) in &query {
+        // TODO: show ron button
+        // on click:
+        let clicked = false; // !placeholder
+        if clicked {
+            messages.write(DeclareRonMessage {
+                player: entity,
+                discarded_by: ron_option.discarded_by,
+                result: ron_option.result.clone(),
+            });
+        }
+    }
+}
+
+
+// move the ron check into new functions
+fn declare_ron(
+    mut messages: MessageReader<DeclareRonMessage>,
+    oya_query: Query<Has<Oya>>,
+    mut points_query: Query<&mut Points>,
+    mut game: ResMut<GameState>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
 ) {
     for message in messages.read() {
+        let is_oya = oya_query.get(message.player).unwrap_or(false);
 
-        if let Ok((hand, open, tenpai, kawa, jikaze,
-            is_closed, is_oya, maybe_riichi)) = query.get_mut(message.player)
+        let score = calculate_score(
+            message.result.total_han,
+            message.result.total_fu,
+            is_oya,
+            false,
+            message.result.is_yakuman,
+            &message.result.yaku_names,
+        );
+
+        if let Ok([mut winner_points, mut loser_points]) =
+            points_query.get_many_mut([message.player, message.discarded_by])
         {
-            let is_riichi = maybe_riichi.is_some();
-            let is_double = maybe_riichi.is_some_and(|r| r.is_double);
-            let is_ippatsu = maybe_riichi.is_some_and(|r| r.is_ippatsu_alive);
+            winner_points.0 += score.total_won as i32;
+            loser_points.0 -= score.total_won as i32;
 
-            if let Some(yaku_result) = can_declare_ron(
-                &message.discard_tile,
-                &hand.0,
-                &open.0,
-                tenpai,
-                is_closed,
-                is_oya,
-                kawa,
-                is_riichi,
-                is_double,
-                is_ippatsu, 
-                &game.bakaze,
-                &jikaze.0,
-                &*wall, // what the fuck is this?
-                &*dead_wall,
-                message.is_chankan,
-                game.calls_made
-            ) {
-                // !should take the yaku list vector also?
+            winner_points.0 += game.riichi_points as i32;
+            game.riichi_points = 0;
 
-                let score = calculate_score(
-                    yaku_result.total_han, 
-                    yaku_result.total_fu, 
-                    is_oya, 
-                    false, 
-                    yaku_result.is_yakuman, 
-                    yaku_result.yaku_names
-                );
-
-                if let Ok([mut winner_points, mut loser_points]) = points_query.get_many_mut([message.player, message.discarded_by]) {
-                    winner_points.0 += score.total_won as i32;
-                    loser_points.0 -= score.total_won as i32;
-                    
-                    winner_points.0 += game.riichi_points as i32;
-                    game.riichi_points = 0;
-                    game.pending_rinshan = false;
-                    
-                    if is_oya {
-                        commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
-                    } else {
-                        commands.insert_resource(RoundResult(RoundEndReason::NonOyaWin));
-                    }
-
-                    next_state.set(TurnState::RoundEnd);
-                }
-
+            if is_oya {
+                commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
+            } else {
+                commands.insert_resource(RoundResult(RoundEndReason::NonOyaWin));
             }
+
+            next_state.set(TurnState::RoundEnd);
         }
+    }
+}
+
+
+// cleanup so player doesn't prepetually qualify for ron
+fn cleanup_call_options(
+    query: Query<Entity, With<RonOption>>,
+    mut commands: Commands,
+) {
+    for entity in &query {
+        commands.entity(entity).remove::<RonOption>();
     }
 }
 
@@ -991,77 +1059,116 @@ fn can_declare_tsumo(
 
 }
 
+// refer to ron counterpart
+fn tsumo_check(
+    current_turn: Res<CurrentTurn>,
+    query: Query<(&Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, &DrawnTile, Has<ClosedHand>, Has<Oya>, Option<&Riichi>)>,
+    game: Res<GameState>,
+    wall: Res<Wall>,
+    dead_wall: Res<DeadWall>,
+    mut commands: Commands,
+) {
+    if let Ok((hand, open_mentsu, tenpai, kawa, jikaze, drawn,
+              is_closed, is_oya, maybe_riichi)) = query.get(current_turn.0)
+    {
+        let is_riichi = maybe_riichi.is_some();
+        let is_double = maybe_riichi.is_some_and(|r| r.is_double);
+        let is_ippatsu = maybe_riichi.is_some_and(|r| r.is_ippatsu_alive);
+
+        if let Some(result) = can_declare_tsumo(
+            &drawn.0, 
+            &hand.0, 
+            &open_mentsu.0, 
+            tenpai,
+            is_closed, 
+            is_oya, 
+            kawa,
+            is_riichi, 
+            is_double, 
+            is_ippatsu,
+            &game.bakaze, 
+            &jikaze.0,
+            &*wall, 
+            &*dead_wall,
+            game.pending_rinshan, 
+            game.calls_made,
+        ) {
+            commands.entity(current_turn.0).insert(TsumoOption { result });
+        }
+    }
+}
+
+
+fn tsumo_ui_system(
+    query: Query<(Entity, &TsumoOption)>,
+    mut messages: MessageWriter<DeclareTsumoMessage>,
+    // ! + ui input stuff
+) {
+    for (entity, tsumo_option) in &query {
+        // TODO: show tsumo button
+        let clicked = false; // !placeholder
+        if clicked {
+            messages.write(DeclareTsumoMessage {
+                player: entity,
+                result: tsumo_option.result.clone(),
+            });
+        }
+    }
+}
+
 
 fn declare_tsumo(
     mut messages: MessageReader<DeclareTsumoMessage>,
-    query: Query<(&Hand, &OpenMentsu, &Tenpai, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>, &Kawa)>,
+    oya_query: Query<Has<Oya>>,
     mut points_query: Query<(Entity, &mut Points, Has<Oya>)>,
     mut game: ResMut<GameState>,
-    wall: Res<Wall>,
-    dead_wall: Res<DeadWall>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
 ) {
     for message in messages.read() {
-        if let Ok((hand, open, tenpai, jikaze,
-            is_closed, is_oya, maybe_riichi, kawa)) = query.get(message.player)
-        {
-            let is_riichi = maybe_riichi.is_some();
-            let is_double = maybe_riichi.is_some_and(|r| r.is_double);
-            let is_ippatsu = maybe_riichi.is_some_and(|r| r.is_ippatsu_alive);
+        let is_oya = oya_query.get(message.player).unwrap_or(false);
 
-            if let Some(yaku_result) =  can_declare_tsumo(
-                &message.drawn_tile, 
-                &hand.0, 
-                &open.0, 
-                tenpai,
-                is_closed, 
-                is_oya, 
-                kawa, 
-                is_riichi,
-                is_double, 
-                is_ippatsu,
-                &game.bakaze,
-                &jikaze.0,
-                &*wall,
-                &*dead_wall,
-                message.is_rinshan,
-                game.calls_made,
-            ) {
-                // !yaku names
+        let score = calculate_score(
+            message.result.total_han,
+            message.result.total_fu,
+            is_oya,
+            true,
+            message.result.is_yakuman,
+            &message.result.yaku_names,
+        );
 
-                let score = calculate_score(
-                    yaku_result.total_han, 
-                    yaku_result.total_fu, 
-                    is_oya, 
-                    true, 
-                    yaku_result.is_yakuman, 
-                    yaku_result.yaku_names
-                );
-
-                for (player, mut player_points, is_dealer) in points_query.iter_mut() {
-                    if player != message.player {
-                        if is_dealer {
-                            player_points.0 -= score.oya_pays as i32;
-                        } else  {
-                            player_points.0 -= score.non_oya_pays as i32;
-                        }
-                    }  else {
-                        player_points.0 += score.total_won as i32;
-                        player_points.0 += game.riichi_points as i32;
-                        game.riichi_points = 0;
-                    }
-                }
-
-                if is_oya {
-                    commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
+        for (player, mut player_points, is_dealer) in points_query.iter_mut() {
+            if player != message.player {
+                if is_dealer {
+                    player_points.0 -= score.oya_pays as i32;
                 } else {
-                    commands.insert_resource(RoundResult(RoundEndReason::NonOyaWin));
+                    player_points.0 -= score.non_oya_pays as i32;
                 }
-
-                next_state.set(TurnState::RoundEnd);
+            } else {
+                player_points.0 += score.total_won as i32;
+                player_points.0 += game.riichi_points as i32;
+                game.riichi_points = 0;
             }
         }
+
+        if is_oya {
+            commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
+        } else {
+            commands.insert_resource(RoundResult(RoundEndReason::NonOyaWin));
+        }
+
+        next_state.set(TurnState::RoundEnd);
+    }
+}
+
+
+// cleanup so player doesn't prepetually qualify for tsumo
+fn cleanup_main_phase_options(
+    query: Query<Entity, With<TsumoOption>>,
+    mut commands: Commands,
+) {
+    for entity in &query {
+        commands.entity(entity).remove::<TsumoOption>();
     }
 }
 
@@ -1126,6 +1233,7 @@ fn tenpai_payout_system(mut query: Query<(&mut Points, Has<Tenpai>)>) {
 
 fn can_declare_kyuushu(hand: &[Tile], calls_made: bool, kawa: &Kawa) -> bool {
     let mut yaochuuhai: Vec<&Tile> = hand.iter().filter(|x| is_yaochuuhai(x)).collect();
+    yaochuuhai.sort();
     yaochuuhai.dedup();
     yaochuuhai.len() >= 9 && !calls_made && kawa.0.is_empty()
 }
@@ -1275,6 +1383,8 @@ fn declare_pon(
                     let idx = hand.0.iter().position(|x| *x == message.tile).unwrap();
                     hand.0.remove(idx);
                 }
+                // this does compile because of non-lexical lifetimes
+                // same with chi and kan
                 for (_, _, mut maybe_riichi) in query.iter_mut() {
                     if let Some(riichi) = maybe_riichi.as_deref_mut() {
                         riichi.is_ippatsu_alive = false;
@@ -1282,6 +1392,7 @@ fn declare_pon(
                 }
                 commands.entity(message.player).remove::<ClosedHand>();
                 commands.entity(*tile_query).despawn(); 
+                game.calls_made = true;
                 current_turn.0 = message.player;
                 next_state.set(TurnState::MainPhase);
                 timer.0.reset();
@@ -1416,7 +1527,7 @@ enum Kantsu {
 fn declare_kan(
     mut messages: MessageReader<DeclareKanMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&mut Riichi>)>,
-    tile_query: Single<Entity, With<CurrentDiscard>>,
+    tile_query: Query<Entity, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut dead_wall: ResMut<DeadWall>,
     mut timer: ResMut<CallWindowTimer>,
@@ -1433,7 +1544,7 @@ fn declare_kan(
             if message.is_discard && count == 3 {
                 open_mentsu.0.push(Mentsu::Daiminkan(vec![*tile; 4]));
                 hand.0.retain(|x| x != tile);
-                commands.entity(*tile_query).despawn(); 
+                commands.entity(tile_query.single().unwrap()).despawn(); 
                 commands.entity(message.player).remove::<ClosedHand>(); 
                 kan_successful_type = Some(Kantsu::Daiminkan);
                 game.pending_kan_dora = true;
@@ -1463,6 +1574,7 @@ fn declare_kan(
                             CurrentDiscard,
                             DiscardedTile(*tile),
                             DiscardedBy(message.player),
+                            Chankan,
                         ));
                         break;
                     } 
@@ -2150,7 +2262,6 @@ fn start_game(
             Kawa(vec![]),
             Alive,
             ClosedHand,
-            Oya,
         ));
 
          if wind == Wind::East {
@@ -2381,7 +2492,7 @@ fn next_round_wind(jikaze: &Wind) -> Wind {
 fn round_cleanup(
     mut query: Query<(Entity, &mut Jikaze, Has<Oya>)>,
     tile_query: Query<Entity, With<DiscardedTile>>,
-    mut player_query: Query<(Entity, &mut Hand, &mut OpenMentsu, &mut Kawa)>,
+    player_query: Query<(Entity, &mut Hand, &mut OpenMentsu, &mut Kawa)>,
     result: Res<RoundResult>,
     mut game: ResMut<GameState>,
     mut commands: Commands,
@@ -2427,6 +2538,9 @@ fn round_cleanup(
 
         commands.entity(player).insert(ClosedHand);
     }
+    game.calls_made = false;
+    game.pending_kan_dora = false;
+    game.pending_rinshan = false;
 
     commands.remove_resource::<RoundResult>();
     next_state.set(TurnState::StartNewRound);
@@ -2437,6 +2551,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .init_state::<TurnState>()
+        // messages
         .add_message::<DiscardTileMessage>()
         .add_message::<DeclarePonMessage>()
         .add_message::<DeclareChiMessage>()
@@ -2444,18 +2559,48 @@ fn main() {
         .add_message::<DeclareRiichiMessage>()
         .add_message::<DeclareRonMessage>()
         .add_message::<DeclareTsumoMessage>()
-        .add_systems(OnEnter(TurnState::Setup), start_game)
-        .add_systems(OnEnter(TurnState::StartNewRound), start_round)
+        .add_message::<DeclareKyuushuMessage>()
+        // setup (first round)
+        .add_systems(OnEnter(TurnState::Setup), (
+            start_game,
+            set_tenpai,
+        ).chain())
+        // new round
+        .add_systems(OnEnter(TurnState::StartNewRound), (
+            start_round,
+            set_tenpai,
+        ).chain())
+        // draw
         .add_systems(OnEnter(TurnState::Draw), draw_tile)
+        // main phase
+        .add_systems(OnEnter(TurnState::MainPhase), (
+            check_ryuukyoku,
+            tsumo_check,
+        ).chain())
         .add_systems(Update, (
+            tsumo_ui_system,
+            declare_tsumo,
             auto_discard_bot,
-            discard_tile, 
-        ).run_if(in_state(TurnState::MainPhase)))
-        .add_systems(OnEnter(TurnState::MainPhase), check_ryuukyoku)
-        .add_systems(Update, call_window_timeout.run_if(in_state(TurnState::CallWindow)))
+            discard_tile,
+        ).run_if(in_state(TurnState::MainPhase))
+        .run_if(not(resource_exists::<RoundResult>)))
+        .add_systems(OnExit(TurnState::MainPhase), cleanup_main_phase_options)
+        // call window
+        .add_systems(OnEnter(TurnState::CallWindow), (
+            set_tenpai,
+            ron_check,
+        ).chain())
+        .add_systems(Update, (
+            ron_ui_system,
+            declare_ron,
+            call_window_timeout,
+        ).run_if(in_state(TurnState::CallWindow)))
+        .add_systems(OnExit(TurnState::CallWindow), cleanup_call_options)
+        // advance & end
         .add_systems(OnEnter(TurnState::AdvanceTurn), next_turn)
         .add_systems(OnEnter(TurnState::RoundEnd), round_cleanup)
         .run();
+
 
 
     // TODO: logical sorting when player picks up a tile (or not?)
