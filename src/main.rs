@@ -3,7 +3,7 @@
 // Fu calculation (done?)
 // Han → Score conversion table (done?)
 // custom yaku and rules later
-// ? 途中流局
+// ? 途中流局 (done?)
 
 
 // TODO: return options for some of these (no)
@@ -67,7 +67,34 @@ enum TurnState {
     AdvanceTurn,   
     RinshanDraw,
     RoundEnd,
+    Execution,
 }
+
+
+struct Execute {
+    shooter: Entity,
+    target: Entity,
+}
+
+#[derive(Resource)]
+struct ExecuteQueue(Vec<Execute>);
+
+#[derive(Resource)]
+struct PendingTargetSelection {
+    shooter: Entity,
+    remaining_picks: u8,
+}
+
+
+#[derive(SubStates, Default, Debug, Clone, Eq, PartialEq, Hash)]
+#[source(TurnState = TurnState::Execution)]
+enum ExecutionSubState {
+    #[default]
+    BuildQueue,
+    SelectTargets,
+    Processing,
+}
+
 
 enum RoundEndReason {
     OyaWin,             // renchan
@@ -79,6 +106,16 @@ enum RoundEndReason {
 
 #[derive(Resource)]
 struct RoundResult(RoundEndReason);
+
+
+// TODO: add tochuu causer to tochuu systems
+#[derive(Resource)]
+struct RoundOutcome {
+    winners: Vec<(Entity, HandResult)>,  // can be multiple for double ron
+    loser: Option<Entity>,               // None for tsumo
+    is_tsumo: bool,
+    tochuu_causer: Option<Entity>,
+}
 
 
 #[derive(Resource)]
@@ -197,19 +234,15 @@ struct DeclareRiichiMessage {
 #[derive(Component)]
 struct Chankan;
 
-//
+
 #[derive(Component)]
 struct RonOption {
     discarded_by: Entity,
     result: HandResult,
 }
 
-#[derive(Message)]
-struct DeclareRonMessage {
-    player: Entity,
-    discarded_by: Entity,
-    result: HandResult,
-}
+#[derive(Component)]
+struct RonDeclared;
 
 #[derive(Component)]
 struct TsumoOption {
@@ -254,6 +287,148 @@ struct ScorePayout {
     pub oya_pays: u32,
     pub non_oya_pays: u32,
 }
+
+#[derive(Resource)]
+struct Revolver {
+    bullet: u8,   
+    chamber: u8, 
+}
+
+impl Revolver {
+    fn new() -> Self {
+        Revolver {
+            bullet: rand::rng().random_range(1..=6),
+            chamber: 1,
+        }
+    }
+
+    fn pull(&mut self) -> bool {
+        let fired = self.chamber == self.bullet;
+        if fired {
+            *self = Revolver::new();
+        } else {
+            self.chamber += 1;
+        }
+        fired
+    }
+}
+
+
+fn shot_count_from_result(result: &HandResult) -> u8 {
+    if result.is_yakuman { return 3; }
+    match result.total_han {
+        16..=21 => 1,    // haneman
+        22..=30 => 2,   // baiman
+        31..=36 => 2,  // sanbaiman
+        _ => 0,
+    }
+}
+
+fn is_low_han(result: &HandResult) -> bool {
+    !result.is_yakuman && result.total_han < 6
+}
+
+
+fn build_shot_queue(
+    outcome: Res<RoundOutcome>,
+    oya_query: Query<Entity, With<Oya>>,
+    mut commands: Commands,
+    mut next_step: ResMut<NextState<ExecutionSubState>>,
+) {
+    let mut queue: Vec<Execute> = vec![];
+    let mut needs_selection = false;
+    let mut selection_shooter = Entity::PLACEHOLDER;
+    let mut selection_picks: u8 = 0;
+    let oya = oya_query.single().unwrap();
+
+    // win-based shots
+    for (winner, result) in &outcome.winners {
+        let shots = shot_count_from_result(result);
+
+        if shots > 0 {
+            if outcome.is_tsumo {
+                needs_selection = true;
+                selection_shooter = *winner;
+                selection_picks = shots;
+            } else if let Some(loser) = outcome.loser {
+                for _ in 0..shots {
+                    queue.push(Execute { shooter: *winner, target: loser });
+                }
+            }
+        }
+    }
+
+    // TODO: emotional threshold
+
+
+    // low han self-shot
+    for (winner, result) in &outcome.winners {
+        if is_low_han(result) {
+            queue.push(Execute { shooter: oya, target: *winner });
+        }
+    }
+
+    // tochuu ryuukyoku
+    if let Some(causer) = outcome.tochuu_causer {
+        queue.push(Execute { shooter: oya, target: causer });
+    }
+
+    commands.insert_resource(ExecuteQueue(queue));
+
+    if needs_selection {
+        commands.insert_resource(PendingTargetSelection {
+            shooter: selection_shooter,
+            remaining_picks: selection_picks,
+        });
+        next_step.set(ExecutionSubState::SelectTargets);
+    } else {
+        next_step.set(ExecutionSubState::Processing);
+    }
+}
+
+
+fn select_targets(
+    mut pending: ResMut<PendingTargetSelection>,
+    mut queue: ResMut<ExecuteQueue>,
+    mut next_step: ResMut<NextState<ExecutionSubState>>,
+    // !+ ui input later
+) {
+    // TODO: show clickable opponents
+    let clicked: Option<Entity> = None; // placeholder
+
+    if let Some(target) = clicked {
+        queue.0.push(Execute {
+            shooter: pending.shooter,
+            target,
+        });
+        pending.remaining_picks -= 1;
+
+        if pending.remaining_picks == 0 {
+            next_step.set(ExecutionSubState::Processing);
+        }
+    }
+}
+
+
+fn process_shot_queue(
+    mut queue: ResMut<ExecuteQueue>,
+    mut revolver: ResMut<Revolver>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>,
+) {
+    for shot in queue.0.drain(..) {
+        if revolver.pull() {
+            commands.entity(shot.target).remove::<Alive>();
+            break;
+        }
+    }
+
+    commands.remove_resource::<ExecuteQueue>();
+    commands.remove_resource::<PendingTargetSelection>();
+    commands.remove_resource::<RoundOutcome>();
+    next_state.set(TurnState::StartNewRound);
+}
+
 
 
 fn check_ryuukyoku(
@@ -318,7 +493,7 @@ fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman: bo
         if is_oya { 
             if is_tsumo {
                 return ScorePayout {
-                    total_won: (yaku_names.len() * 48000) as u32,
+                    total_won: (yaku_names.len() * 48000) as u32, // TODO: multiple by 3
                     oya_pays: 0,
                     non_oya_pays: (yaku_names.len() * 48000 / 3) as u32,
                 }; 
@@ -350,12 +525,13 @@ fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman: bo
     // https://riichi.wiki/Japanese_mahjong_scoring_rules
     let mut base: u32 = fu as u32 * 2_u32.pow((han + 2).into());
 
-    if base > 2000 || han > 5 || (han >= 4 && fu >= 40) || (han >= 3 && fu >= 70) {
+    // ! testing
+    if base > 2000 || han > 15 || (han >= 12 && fu >= 40) || (han >= 9 && fu >= 70) {
         match han {
-            3..=5 => base = 2000,
-            6..=7 => base = 3000,
-            8..=9 => base = 4000,
-            10..=12 => base = 6000,
+            9..=15 => base = 2000,
+            16..=21 => base = 3000,
+            22..=30 => base = 4000,
+            31..=36 => base = 6000,
             _ => base = 8000,
         }
     }
@@ -457,6 +633,8 @@ fn evaluate_yaku(
     }
 
     if !best.yaku_names.is_empty() && !best.is_yakuman {
+        // ! testing
+        best.total_han *= 3;
         best.total_han += count_dora(combined_hand, dead_wall, is_riichi)
     }
 
@@ -858,6 +1036,23 @@ fn can_declare_ron(
 }
 
 
+// riichi sticks distribution
+fn wind_to_num(wind: &Wind) -> u8 {
+    match wind {
+        Wind::East => 0,
+        Wind::South => 1,
+        Wind::West => 2,
+        Wind::North => 3,
+    }
+}
+
+fn turn_distance(from: &Wind, to: &Wind) -> u8 {
+    let from_n = wind_to_num(from);
+    let to_n = wind_to_num(to);
+    (to_n + 4 - from_n) % 4
+}
+
+
 // TODO: multiple ron
 // runs once upon entering CallWindow 
 fn ron_check(
@@ -911,74 +1106,127 @@ fn ron_check(
 // reads RonOption, shows button, sends message on click
 // TODO:  the actual ui
 fn ron_ui_system(
-    query: Query<(Entity, &RonOption)>,
-    mut messages: MessageWriter<DeclareRonMessage>,
+    query: Query<(Entity, &RonOption), Without<RonDeclared>>,
+    mut commands: Commands,
     // ! + ui input stuff later
 ) {
-    for (entity, ron_option) in &query {
+    for (entity, _) in &query {
         // TODO: show ron button
-        // on click:
         let clicked = false; // !placeholder
         if clicked {
-            messages.write(DeclareRonMessage {
-                player: entity,
-                discarded_by: ron_option.discarded_by,
-                result: ron_option.result.clone(),
-            });
+            commands.entity(entity).insert(RonDeclared);
         }
     }
 }
 
 
-// move the ron check into new functions
 fn declare_ron(
-    mut messages: MessageReader<DeclareRonMessage>,
+    declared: Query<(Entity, &RonOption, &Jikaze), With<RonDeclared>>,
+    undecided: Query<Entity, (With<RonOption>, Without<RonDeclared>)>,
+    timer: Res<CallWindowTimer>,
     oya_query: Query<Has<Oya>>,
+    jikaze_query: Query<&Jikaze>,
     mut points_query: Query<&mut Points>,
     mut game: ResMut<GameState>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
 ) {
-    for message in messages.read() {
-        let is_oya = oya_query.get(message.player).unwrap_or(false);
+    let all_decided = undecided.iter().count() == 0;
+    let timer_expired = timer.0.is_finished();
+
+    if !all_decided && !timer_expired { 
+        return; 
+    }
+
+    // automatically transitions to the next phase
+    let mut winners: Vec<_> = declared.iter().collect();
+    if winners.is_empty() { 
+        return; 
+    }
+
+    // sanchahou
+    if winners.len() >= 3 {
+        commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
+        next_state.set(TurnState::RoundEnd);
+        return;
+    }
+
+    
+
+    let mut any_oya_won = false;
+    let mut ron_winners = vec![];
+    for (winner, ron_option, _) in &winners {
+        let is_oya = oya_query.get(*winner).unwrap_or(false);
+        if is_oya { 
+            any_oya_won = true; 
+        }
 
         let score = calculate_score(
-            message.result.total_han,
-            message.result.total_fu,
+            ron_option.result.total_han,
+            ron_option.result.total_fu,
             is_oya,
             false,
-            message.result.is_yakuman,
-            &message.result.yaku_names,
+            ron_option.result.is_yakuman,
+            &ron_option.result.yaku_names,
         );
 
-        if let Ok([mut winner_points, mut loser_points]) =
-            points_query.get_many_mut([message.player, message.discarded_by])
+        if let Ok([mut winner_pts, mut loser_pts]) =
+            points_query.get_many_mut([*winner, ron_option.discarded_by])
         {
-            winner_points.0 += score.total_won as i32;
-            loser_points.0 -= score.total_won as i32;
-
-            winner_points.0 += game.riichi_points as i32;
-            game.riichi_points = 0;
-
-            if is_oya {
-                commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
-            } else {
-                commands.insert_resource(RoundResult(RoundEndReason::NonOyaWin));
-            }
-
-            next_state.set(TurnState::RoundEnd);
+            winner_pts.0 += score.total_won as i32;
+            loser_pts.0 -= score.total_won as i32;
         }
+
+        ron_winners.push((*winner, ron_option.result.to_owned()));
     }
+
+    commands.insert_resource(RoundOutcome{
+        winners: ron_winners,  
+        loser: Some(winners[0].1.discarded_by),       
+        is_tsumo: false,
+        tochuu_causer: None,
+    });
+
+    // riichi sticks go to closest winner (sorted first)
+    let discarder = winners[0].1.discarded_by;
+    if let Ok(discarder_jikaze) = jikaze_query.get(discarder) {
+        winners.sort_by_key(|(_, _, jikaze)| turn_distance(&discarder_jikaze.0, &jikaze.0));
+    }
+
+    if let Some((closest, _, _)) = winners.first()
+    && let Ok(mut pts) = points_query.get_mut(*closest) {
+            pts.0 += game.riichi_points as i32;
+            game.riichi_points = 0;
+    }
+
+ 
+    if any_oya_won {
+        commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
+    } else {
+        commands.insert_resource(RoundResult(RoundEndReason::NonOyaWin));
+    }
+
+    next_state.set(TurnState::RoundEnd);
 }
 
 
 // cleanup so player doesn't prepetually qualify for ron
 fn cleanup_call_options(
-    query: Query<Entity, With<RonOption>>,
+    passed: Query<Entity, (With<RonOption>, Without<RonDeclared>)>,
+    discard_query: Query<Entity, With<CurrentDiscard>>,
+    round_result: Option<Res<RoundResult>>,
     mut commands: Commands,
 ) {
-    for entity in &query {
+    if round_result.is_none() {
+        for entity in &passed {
+            commands.entity(entity).insert(Furiten);
+        }
+    }
+    for entity in &passed {
         commands.entity(entity).remove::<RonOption>();
+    }
+    for entity in &discard_query {
+        commands.entity(entity).despawn();
     }
 }
 
@@ -1125,7 +1373,9 @@ fn declare_tsumo(
     mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
 ) {
-    for message in messages.read() {
+    // yeah these should be a simple if let check instead of a for loop 
+    // because this game is turn based and there can only be 1 message per turn (player turn not jun)
+    if let Some(message) = messages.read().next() {
         let is_oya = oya_query.get(message.player).unwrap_or(false);
 
         let score = calculate_score(
@@ -1150,6 +1400,13 @@ fn declare_tsumo(
                 game.riichi_points = 0;
             }
         }
+
+        commands.insert_resource(RoundOutcome{
+            winners: vec![(message.player, message.result.to_owned())],  
+            loser: None,       
+            is_tsumo: true,
+            tochuu_causer: None,
+        });
 
         if is_oya {
             commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
@@ -2286,7 +2543,7 @@ fn start_game(
     commands.insert_resource(CurrentTurn(starting_player));
     
     commands.insert_resource(Wall(wall));
-    commands.insert_resource(CallWindowTimer(Timer::from_seconds(2.0, TimerMode::Once)));
+    commands.insert_resource(CallWindowTimer(Timer::from_seconds(5.0, TimerMode::Once)));
     println!("ゲーム開始");
     next_state.set(TurnState::Draw);
 }
@@ -2535,6 +2792,9 @@ fn round_cleanup(
         commands.entity(player).remove::<Riichi>();
         commands.entity(player).remove::<Furiten>();
         commands.entity(player).remove::<DrawnTile>();
+        commands.entity(player).remove::<RonOption>();      
+        commands.entity(player).remove::<RonDeclared>();     
+        commands.entity(player).remove::<TsumoOption>();    
 
         commands.entity(player).insert(ClosedHand);
     }
@@ -2543,7 +2803,7 @@ fn round_cleanup(
     game.pending_rinshan = false;
 
     commands.remove_resource::<RoundResult>();
-    next_state.set(TurnState::StartNewRound);
+    next_state.set(TurnState::Execution);
 }
 
 fn main() {
@@ -2557,7 +2817,6 @@ fn main() {
         .add_message::<DeclareChiMessage>()
         .add_message::<DeclareKanMessage>()
         .add_message::<DeclareRiichiMessage>()
-        .add_message::<DeclareRonMessage>()
         .add_message::<DeclareTsumoMessage>()
         .add_message::<DeclareKyuushuMessage>()
         // setup (first round)
@@ -2594,11 +2853,18 @@ fn main() {
             ron_ui_system,
             declare_ron,
             call_window_timeout,
-        ).run_if(in_state(TurnState::CallWindow)))
+        ).chain()
+        .run_if(in_state(TurnState::CallWindow))
+        .run_if(not(resource_exists::<RoundResult>)))
         .add_systems(OnExit(TurnState::CallWindow), cleanup_call_options)
         // advance & end
         .add_systems(OnEnter(TurnState::AdvanceTurn), next_turn)
         .add_systems(OnEnter(TurnState::RoundEnd), round_cleanup)
+        // shooting phase
+        .add_sub_state::<ExecutionSubState>()
+        .add_systems(OnEnter(ExecutionSubState::BuildQueue), build_shot_queue)
+        .add_systems(Update, select_targets.run_if(in_state(ExecutionSubState::SelectTargets)))
+        .add_systems(OnEnter(ExecutionSubState::Processing), process_shot_queue)
         .run();
 
 
