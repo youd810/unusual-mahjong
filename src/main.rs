@@ -4,6 +4,7 @@
 // Han → Score conversion table (done?)
 // custom yaku and rules later
 // ? 途中流局 (done?)
+// ! ai behavior (priority: call/naki resolving logic)
 
 
 // TODO: return options for some of these (no)
@@ -49,7 +50,7 @@ enum Wind {
     North
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 enum ChiTilePos { // tile drawn/discarded
     Left,  
     Middle, 
@@ -114,7 +115,7 @@ struct RoundOutcome {
     winners: Vec<(Entity, HandResult)>,  // can be multiple for double ron
     loser: Option<Entity>,               // None for tsumo
     is_tsumo: bool,
-    tochuu_causer: Option<Entity>,
+    tochuu_causer: Vec<Entity>,
 }
 
 
@@ -193,7 +194,7 @@ struct Alive;
 #[derive(Component)]
 struct Kawa(Vec<Tile>);
 
-// !a component to an entity (each tile is its own entity)
+// ! a component to an entity (each tile is its own entity)
 #[derive(Component)] 
 struct DiscardedTile(Tile);
 
@@ -203,6 +204,36 @@ struct DiscardedBy(Entity);
 #[derive(Component)]
 struct CurrentDiscard;
 
+
+// ! a call/naki lock. very important!
+#[derive(Resource, Default)]
+struct CallLock(bool);
+
+
+#[derive(Component)]
+struct PonOption(Tile);
+
+#[derive(Component)]
+struct ChiOption {
+    tile: Tile,
+    positions: Vec<ChiTilePos>,
+}
+
+#[derive(Component)]
+struct DaiminkanOption(Tile);
+
+// main phase
+#[derive(Component)]
+struct AnkanOption(Vec<Tile>);
+
+#[derive(Component)]
+struct ShouminkanOption(Vec<Tile>);
+
+#[derive(Component)]
+struct RiichiOption;
+
+#[derive(Component)]
+struct KyuushuOption;
 
 #[derive(Message)]
 struct DeclarePonMessage {
@@ -369,8 +400,11 @@ fn build_shot_queue(
     }
 
     // tochuu ryuukyoku
-    if let Some(causer) = outcome.tochuu_causer {
-        queue.push(Execute { shooter: oya, target: causer });
+    if !outcome.tochuu_causer.is_empty() {
+        let shooter = outcome.loser.unwrap_or(oya);
+        for target in &outcome.tochuu_causer {
+            queue.push(Execute { shooter, target: *target });
+        }
     }
 
     commands.insert_resource(ExecuteQueue(queue));
@@ -479,7 +513,7 @@ fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool) -> 
         if is_riichi {
             for ura in dead_wall.ura_indicators.iter() {
                 if *tile == get_dora_from_indicator(ura) {
-                    additional_han += 1 
+                    additional_han += 2 // ! testing 
                 }
             }
         }
@@ -493,7 +527,7 @@ fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman: bo
         if is_oya { 
             if is_tsumo {
                 return ScorePayout {
-                    total_won: (yaku_names.len() * 48000) as u32, // TODO: multiple by 3
+                    total_won: (yaku_names.len() * 48000) as u32, // TODO: multiple by 3 (no this stays the same)
                     oya_pays: 0,
                     non_oya_pays: (yaku_names.len() * 48000 / 3) as u32,
                 }; 
@@ -523,7 +557,7 @@ fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman: bo
     }
 
     // https://riichi.wiki/Japanese_mahjong_scoring_rules
-    let mut base: u32 = fu as u32 * 2_u32.pow((han + 2).into());
+    let mut base: u32 = fu as u32 * 2_u32.pow((han.div_ceil(3) + 2).into()); // TODO: make this work somehow
 
     // ! testing
     if base > 2000 || han > 15 || (han >= 12 && fu >= 40) || (han >= 9 && fu >= 70) {
@@ -1129,8 +1163,13 @@ fn declare_ron(
     mut points_query: Query<&mut Points>,
     mut game: ResMut<GameState>,
     mut next_state: ResMut<NextState<TurnState>>,
+    mut lock: ResMut<CallLock>,
     mut commands: Commands,
 ) {
+
+    lock.0 = true;
+
+
     let all_decided = undecided.iter().count() == 0;
     let timer_expired = timer.0.is_finished();
 
@@ -1147,6 +1186,12 @@ fn declare_ron(
     // sanchahou
     if winners.len() >= 3 {
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
+        commands.insert_resource(RoundOutcome {
+                    winners: vec![],  
+                    loser: Some(winners[0].1.discarded_by),             
+                    is_tsumo: false,
+                    tochuu_causer: winners.iter().map(|(e, _, _)| *e).collect(),
+                });
         next_state.set(TurnState::RoundEnd);
         return;
     }
@@ -1184,7 +1229,7 @@ fn declare_ron(
         winners: ron_winners,  
         loser: Some(winners[0].1.discarded_by),       
         is_tsumo: false,
-        tochuu_causer: None,
+        tochuu_causer: vec![],
     });
 
     // riichi sticks go to closest winner (sorted first)
@@ -1213,6 +1258,7 @@ fn declare_ron(
 // cleanup so player doesn't prepetually qualify for ron
 fn cleanup_call_options(
     passed: Query<Entity, (With<RonOption>, Without<RonDeclared>)>,
+    all_call: Query<Entity, Or<(With<RonOption>, With<RonDeclared>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>>,
     discard_query: Query<Entity, With<CurrentDiscard>>,
     round_result: Option<Res<RoundResult>>,
     mut commands: Commands,
@@ -1222,9 +1268,16 @@ fn cleanup_call_options(
             commands.entity(entity).insert(Furiten);
         }
     }
-    for entity in &passed {
-        commands.entity(entity).remove::<RonOption>();
+
+    for entity in &all_call {
+        commands.entity(entity)
+            .remove::<RonOption>()
+            .remove::<RonDeclared>()
+            .remove::<PonOption>()
+            .remove::<ChiOption>()
+            .remove::<DaiminkanOption>();
     }
+
     for entity in &discard_query {
         commands.entity(entity).despawn();
     }
@@ -1405,7 +1458,7 @@ fn declare_tsumo(
             winners: vec![(message.player, message.result.to_owned())],  
             loser: None,       
             is_tsumo: true,
-            tochuu_causer: None,
+            tochuu_causer: vec![],
         });
 
         if is_oya {
@@ -1488,6 +1541,21 @@ fn tenpai_payout_system(mut query: Query<(&mut Points, Has<Tenpai>)>) {
 }
 
 
+fn kyuushu_check(
+    current_turn: Res<CurrentTurn>,
+    query: Query<(&Hand, &Kawa, &DrawnTile)>,
+    game: Res<GameState>,
+    mut commands: Commands,
+) {
+    if let Ok((hand, kawa, drawn)) = query.get(current_turn.0) {
+        let mut combined = hand.0.clone();
+        combined.push(drawn.0);
+        if can_declare_kyuushu(&combined, game.calls_made, kawa) {
+            commands.entity(current_turn.0).insert(KyuushuOption);
+        }
+    }
+}
+
 fn can_declare_kyuushu(hand: &[Tile], calls_made: bool, kawa: &Kawa) -> bool {
     let mut yaochuuhai: Vec<&Tile> = hand.iter().filter(|x| is_yaochuuhai(x)).collect();
     yaochuuhai.sort();
@@ -1519,6 +1587,7 @@ fn declare_kyuushu(
 fn suufon_renda(
     game: Res<GameState>,
     query: Query<&Kawa>,
+    causer: Single<Entity, With<CurrentDiscard>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>
 ) {
@@ -1531,6 +1600,12 @@ fn suufon_renda(
                 && four_kawa.iter().all(|kawa| kawa.0[0] == first_tile)
             {
                 commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
+                commands.insert_resource(RoundOutcome {
+                    winners: vec![],  
+                    loser: None,             
+                    is_tsumo: false,
+                    tochuu_causer: vec![*causer],
+                });
                 next_state.set(TurnState::RoundEnd);
             }
         }
@@ -1540,11 +1615,18 @@ fn suufon_renda(
 
 fn suucha_riichi(
     query: Query<&Riichi>,
+    causer: Single<Entity, With<CurrentDiscard>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>
 ) {
     if query.count() == 4 {
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
+        commands.insert_resource(RoundOutcome {
+                    winners: vec![],  
+                    loser: None,             
+                    is_tsumo: false,
+                    tochuu_causer: vec![*causer],
+                });
         next_state.set(TurnState::RoundEnd);
     }
 }
@@ -1552,6 +1634,7 @@ fn suucha_riichi(
 
 fn suukaikan(
     query: Query<&OpenMentsu>,
+    causer: Single<Entity, With<CurrentDiscard>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
@@ -1571,12 +1654,29 @@ fn suukaikan(
 
     if total_kan >= 4 && players_with_kan > 1 {
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
+        commands.insert_resource(RoundOutcome {
+                    winners: vec![],  
+                    loser: None,             
+                    is_tsumo: false,
+                    tochuu_causer: vec![*causer],
+                });
         next_state.set(TurnState::RoundEnd);
     }
 }
 
-// TODO: Sanchahou
 
+fn riichi_check(
+    current_turn: Res<CurrentTurn>,
+    query: Query<(&Hand, &Points, Has<ClosedHand>, Has<Riichi>)>,
+    wall: Res<Wall>,
+    mut commands: Commands,
+) {
+    if let Ok((hand, points, is_closed, is_riichi)) = query.get(current_turn.0) {
+        if can_declare_riichi(&hand.0, is_closed, is_riichi, points.0, &*wall) {
+            commands.entity(current_turn.0).insert(RiichiOption);
+        }
+    }
+}
 
 fn can_declare_riichi(hand: &[Tile], is_closed: bool, is_riichi: bool, points: i32, wall: &Wall) -> bool {
     !is_riichi
@@ -1617,6 +1717,20 @@ impl Hand {
     }
 }
 
+fn pon_check(
+    query: Query<(Entity, &Hand), Without<Riichi>>,
+    discard: Query<(&DiscardedTile, &DiscardedBy), With<CurrentDiscard>>,
+    mut commands: Commands,
+) {
+    let Ok((tile, discarded_by)) = discard.single() else { return };
+    for (player, hand) in &query {
+        if player == discarded_by.0 { continue; }
+        if can_declare_pon(&hand.0, &tile.0) {
+            commands.entity(player).insert(PonOption(tile.0));
+        }
+    }
+}
+
 
 fn can_declare_pon(hand: &[Tile], tile: &Tile,) -> bool {
     hand.iter().filter(|x| **x == *tile).count() >= 2
@@ -1630,11 +1744,18 @@ fn declare_pon(
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut timer: ResMut<CallWindowTimer>,
+    mut lock: ResMut<CallLock>,
     mut commands: Commands,
 ) {
     for message in messages.read(){
+        if lock.0 { 
+            return; 
+        }
+
         if let Ok((mut hand, mut open_mentsu, _)) = query.get_mut(message.player) 
             && can_declare_pon(&hand.0 ,&message.tile) { 
+                lock.0 = true;
+
                 open_mentsu.0.push(Mentsu::Koutsu(vec![message.tile; 3], false));
                 for _ in 0..2 {
                     let idx = hand.0.iter().position(|x| *x == message.tile).unwrap();
@@ -1653,6 +1774,26 @@ fn declare_pon(
                 current_turn.0 = message.player;
                 next_state.set(TurnState::MainPhase);
                 timer.0.reset();
+        }
+    }
+}
+
+
+fn chi_check(
+    query: Query<(Entity, &Hand, &Jikaze), Without<Riichi>>,
+    discard: Query<(&DiscardedTile, &DiscardedBy), With<CurrentDiscard>>,
+    jikaze_query: Query<&Jikaze>,
+    mut commands: Commands,
+) {
+    let Ok((tile, discarded_by)) = discard.single() else { return };
+    let Ok(discarder_jikaze) = jikaze_query.get(discarded_by.0) else { return };
+
+    for (player, hand, jikaze) in &query {
+        if player == discarded_by.0 { continue; }
+        if !is_kamicha(&jikaze.0, &discarder_jikaze.0) { continue; }
+        let positions = can_declare_chi(&hand.0, &tile.0);
+        if !positions.is_empty() {
+            commands.entity(player).insert(ChiOption { tile: tile.0, positions });
         }
     }
 }
@@ -1699,9 +1840,14 @@ fn declare_chi(
     mut timer: ResMut<CallWindowTimer>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
+    mut lock: ResMut<CallLock>,
     mut commands: Commands,
 ) {
     for message in messages.read() {
+        if lock.0 { 
+            return; 
+        }
+
         let is_valid = if let (
             Ok((hand, _, self_jikaze, _)),
             Ok((_, _, discard_jikaze, _))
@@ -1718,6 +1864,8 @@ fn declare_chi(
         };
 
         if is_valid && let Ok((mut hand, mut open_mentsu, _, _))= query.get_mut(message.player) {
+            lock.0 = true;
+
             let pos: &ChiTilePos = &message.pos; // let the player choose 
             let tile = &message.tile;
 
@@ -1761,6 +1909,64 @@ fn declare_chi(
     }
 }
 
+fn ankan_check(
+    current_turn: Res<CurrentTurn>,
+    query: Query<(&Hand, &DrawnTile)>,
+    mut commands: Commands,
+) {
+    if let Ok((hand, drawn)) = query.get(current_turn.0) {
+        let mut full_hand = hand.0.clone();
+        full_hand.push(drawn.0);
+        let mut kan_tiles = vec![];
+        let mut seen = vec![];
+        for tile in &full_hand {
+            if seen.contains(tile) { continue; }
+            seen.push(*tile);
+            if full_hand.iter().filter(|t| *t == tile).count() == 4 {
+                kan_tiles.push(*tile);
+            }
+        }
+        if !kan_tiles.is_empty() {
+            commands.entity(current_turn.0).insert(AnkanOption(kan_tiles));
+        }
+    }
+}
+
+fn daiminkan_check(
+    query: Query<(Entity, &Hand), Without<Riichi>>,
+    discard: Query<(&DiscardedTile, &DiscardedBy), With<CurrentDiscard>>,
+    mut commands: Commands,
+) {
+    let Ok((tile, discarded_by)) = discard.single() else { return };
+    for (player, hand) in &query {
+        if player == discarded_by.0 { continue; }
+        if can_declare_kan_from_hand(&hand.0, &tile.0) == 3 {
+            commands.entity(player).insert(DaiminkanOption(tile.0));
+        }
+    }
+}
+
+fn shouminkan_check(
+    current_turn: Res<CurrentTurn>,
+    query: Query<(&Hand, &OpenMentsu, &DrawnTile)>,
+    mut commands: Commands,
+) {
+    if let Ok((hand, open, drawn)) = query.get(current_turn.0) {
+        let mut full_hand = hand.0.clone();
+        full_hand.push(drawn.0);
+        let mut kan_tiles = vec![];
+        for tile in &full_hand {
+            if can_declare_kan_from_pon(&open.0, tile) && !kan_tiles.contains(tile) {
+                kan_tiles.push(*tile);
+            }
+        }
+        if !kan_tiles.is_empty() {
+            commands.entity(current_turn.0).insert(ShouminkanOption(kan_tiles));
+        }
+    }
+}
+
+
 fn can_declare_kan_from_hand(hand: &[Tile], tile: &Tile) -> u8 {
     hand.iter().filter(|x| *x == tile).count() as u8
 }
@@ -1790,10 +1996,16 @@ fn declare_kan(
     mut timer: ResMut<CallWindowTimer>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
+    mut lock: ResMut<CallLock>,
     mut commands: Commands
 ) { 
     for message in messages.read() {
+        if lock.0 { 
+            return; 
+        } 
+
         if let Ok((mut hand, mut open_mentsu, _)) = query.get_mut(message.player){
+            lock.0 = true;
             let tile = &message.tile;
             let count = can_declare_kan_from_hand(&hand.0, tile);
             let mut kan_successful_type: Option<Kantsu> = None;
@@ -2528,6 +2740,8 @@ fn start_game(
 
     }
 
+    commands.insert_resource(Revolver::new());
+
     commands.insert_resource(
         GameState { 
             rounds: 1,  
@@ -2556,6 +2770,7 @@ fn draw_tile(
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>, // used to change the game phase
 ) {
+    // this wouldn't cause a panic because the ryuukyoku check would end the game right there and then
     let drawn = wall.0.remove(0); 
     commands.entity(current_turn.0).insert(DrawnTile(drawn));
 
@@ -2794,7 +3009,14 @@ fn round_cleanup(
         commands.entity(player).remove::<DrawnTile>();
         commands.entity(player).remove::<RonOption>();      
         commands.entity(player).remove::<RonDeclared>();     
-        commands.entity(player).remove::<TsumoOption>();    
+        commands.entity(player).remove::<TsumoOption>();  
+        commands.entity(player).remove::<PonOption>();
+        commands.entity(player).remove::<ChiOption>();
+        commands.entity(player).remove::<DaiminkanOption>();
+        commands.entity(player).remove::<AnkanOption>();
+        commands.entity(player).remove::<ShouminkanOption>();
+        commands.entity(player).remove::<RiichiOption>();
+        commands.entity(player).remove::<KyuushuOption>();  
 
         commands.entity(player).insert(ClosedHand);
     }
@@ -2835,10 +3057,17 @@ fn main() {
         .add_systems(OnEnter(TurnState::MainPhase), (
             check_ryuukyoku,
             tsumo_check,
+            riichi_check,
+            kyuushu_check,
+            ankan_check,
+            shouminkan_check,
         ).chain())
         .add_systems(Update, (
             tsumo_ui_system,
             declare_tsumo,
+            declare_riichi,
+            declare_kyuushu,
+            declare_kan,
             auto_discard_bot,
             discard_tile,
         ).run_if(in_state(TurnState::MainPhase))
@@ -2846,20 +3075,37 @@ fn main() {
         .add_systems(OnExit(TurnState::MainPhase), cleanup_main_phase_options)
         // call window
         .add_systems(OnEnter(TurnState::CallWindow), (
+            suufon_renda,
+            suucha_riichi,
+            suukaikan,
             set_tenpai,
             ron_check,
+            pon_check,
+            chi_check,
+            daiminkan_check,
+            |mut commands: Commands| commands.insert_resource(CallLock(false)), // lock reset
         ).chain())
         .add_systems(Update, (
             ron_ui_system,
             declare_ron,
+            declare_kan,
+            declare_pon,
+            declare_chi,
             call_window_timeout,
         ).chain()
         .run_if(in_state(TurnState::CallWindow))
         .run_if(not(resource_exists::<RoundResult>)))
         .add_systems(OnExit(TurnState::CallWindow), cleanup_call_options)
+        // rinshan draw
+        .add_systems(OnEnter(TurnState::RinshanDraw), rinshan_draw)
         // advance & end
         .add_systems(OnEnter(TurnState::AdvanceTurn), next_turn)
-        .add_systems(OnEnter(TurnState::RoundEnd), round_cleanup)
+        .add_systems(OnEnter(TurnState::RoundEnd), (
+            tenpai_payout_system
+                .run_if(|result: Res<RoundResult>| matches!(result.0,
+                    RoundEndReason::RyuukyokuOyaTenpai | RoundEndReason::RyuukyokuOyaNoten)),
+            round_cleanup,
+        ).chain())
         // shooting phase
         .add_sub_state::<ExecutionSubState>()
         .add_systems(OnEnter(ExecutionSubState::BuildQueue), build_shot_queue)
