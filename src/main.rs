@@ -56,7 +56,6 @@ fn main() {
         .add_systems(OnEnter(TurnState::Draw), draw_tile)
         // main phase
         .add_systems(OnEnter(TurnState::MainPhase), (
-            check_ryuukyoku,
             tsumo_check,
             riichi_check,
             kyuushu_check,
@@ -73,7 +72,7 @@ fn main() {
             discard_tile,
         ).run_if(in_state(TurnState::MainPhase))
         .run_if(not(resource_exists::<RoundResult>)))
-        .add_systems(OnExit(TurnState::MainPhase), cleanup_main_phase_options)
+        .add_systems(OnExit(TurnState::MainPhase),(check_ryuukyoku, cleanup_main_phase_options).chain())
         // call window
         .add_systems(OnEnter(TurnState::CallWindow), (
             suufon_renda,

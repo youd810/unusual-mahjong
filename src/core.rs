@@ -399,8 +399,9 @@ pub fn can_declare_ron(
     dead_wall: &DeadWall,
     is_chankan: bool,
     calls_made: bool,
+    has_temp_furiten: bool,
 ) -> Option<HandResult> {
-    if !tenpai.0.contains(discard_tile) || is_furiten(kawa, tenpai) {
+    if !tenpai.0.contains(discard_tile) || is_furiten(kawa, tenpai) || has_temp_furiten {
         return None;
     }
 

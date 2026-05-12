@@ -100,6 +100,7 @@ pub fn sanankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool, thirteen
         .filter(|mentsu| {
             if let Mentsu::Koutsu(tiles, true) | Mentsu::Ankan(tiles) = mentsu {
                 // compares result with thirteen tiles to see if the winning tile forms the final koutsu and doesn't come from ron 
+                // this check should suffice, or shouldn't it?
                 !(tiles[0] == *winning_tile && !is_tsumo && thirteen_tiles.iter().filter(|x| *x == winning_tile).count() == 2)
             } else {
                 false

@@ -134,7 +134,20 @@ pub fn check_ryuukyoku(
 // TODO: multiple ron
 // runs once upon entering CallWindow 
 pub fn ron_check(
-    query: Query<(Entity, &Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, Has<ClosedHand>, Has<Oya>, Option<&Riichi>,)>,
+    query: Query<(
+        Entity, 
+        &Hand, 
+        &OpenMentsu, 
+        &Tenpai, 
+        &Kawa, 
+        &Jikaze, 
+        Has<ClosedHand>, 
+        Has<Oya>, 
+        Has<Riichi>, 
+        Has<Ippatsu>, 
+        Has<DoubleRiichi>, 
+        Has<Furiten>
+    )>,
     discard_query: Query<(&DiscardedTile, &DiscardedBy, Has<Chankan>), With<CurrentDiscard>>,
     game: Res<GameState>,
     wall: Res<Wall>,
@@ -146,13 +159,9 @@ pub fn ron_check(
     };
 
     for (player, hand, open_mentsu, tenpai, kawa, jikaze,
-         is_closed, is_oya, maybe_riichi) in &query
+         is_closed, is_oya, is_riichi, is_ippatsu, is_double, has_temp_furiten) in &query
     {
         if player == discarded_by.0 { continue; }
-
-        let is_riichi = maybe_riichi.is_some();
-        let is_double = maybe_riichi.is_some_and(|r| r.is_double);
-        let is_ippatsu = maybe_riichi.is_some_and(|r| r.is_ippatsu_alive);
 
         if let Some(result) = can_declare_ron(
             &discarded_tile.0, 
@@ -171,6 +180,7 @@ pub fn ron_check(
             &*dead_wall,
             is_chankan, 
             game.calls_made,
+            has_temp_furiten
         ) {
             commands.entity(player).insert(RonOption {
                 discarded_by: discarded_by.0,
@@ -330,20 +340,16 @@ pub fn cleanup_call_options(
 // refer to ron counterpart
 pub fn tsumo_check(
     current_turn: Res<CurrentTurn>,
-    query: Query<(&Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, &DrawnTile, Has<ClosedHand>, Has<Oya>, Option<&Riichi>)>,
+    query: Query<(&Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, &DrawnTile, Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>)>,
     game: Res<GameState>,
     wall: Res<Wall>,
     dead_wall: Res<DeadWall>,
     mut commands: Commands,
 ) {
     if let Ok((hand, open_mentsu, tenpai, kawa, jikaze, drawn,
-              is_closed, is_oya, maybe_riichi)) = query.get(current_turn.0)
-    {
-        let is_riichi = maybe_riichi.is_some();
-        let is_double = maybe_riichi.is_some_and(|r| r.is_double);
-        let is_ippatsu = maybe_riichi.is_some_and(|r| r.is_ippatsu_alive);
-
-        if let Some(result) = can_declare_tsumo(
+              is_closed, is_oya, is_riichi, is_ippatsu, is_double)) = query.get(current_turn.0)
+    
+        && let Some(result) = can_declare_tsumo(
             &drawn.0, 
             &hand.0, 
             &open_mentsu.0, 
@@ -363,7 +369,7 @@ pub fn tsumo_check(
         ) {
             commands.entity(current_turn.0).insert(TsumoOption { result });
         }
-    }
+    
 }
 
 
@@ -623,10 +629,13 @@ pub fn declare_riichi(
         if let Ok((is_closed, is_riichi, hand, mut points, kawa)) = query.get_mut(message.player) 
             && can_declare_riichi(&hand.0, is_closed, is_riichi, points.0, &*wall) {
                 let is_double = kawa.0.is_empty() && !game.calls_made;
-                commands.entity(message.player).insert(Riichi { 
-                    is_double, 
-                    is_ippatsu_alive: true, 
-                    turns_since: 0 });
+                commands.entity(message.player).insert((
+                    Riichi { turns_since: 0 },
+                    Ippatsu,
+                ));
+                if is_double {
+                    commands.entity(message.player).insert(DoubleRiichi);
+                }
                 points.0 -= 1000;
                 game.riichi_points += 1000;
             }
@@ -652,8 +661,9 @@ pub fn pon_check(
 
 pub fn declare_pon(
     mut messages: MessageReader<DeclarePonMessage>,
-    mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&mut Riichi>)>,
-    mut tile_query: Single<Entity, With<CurrentDiscard>>,
+    mut query: Query<(&mut Hand, &mut OpenMentsu)>,
+    ippatsu_query: Query<Entity, With<Ippatsu>>,
+    tile_query: Single<Entity, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
@@ -666,7 +676,7 @@ pub fn declare_pon(
             return; 
         }
 
-        if let Ok((mut hand, mut open_mentsu, _)) = query.get_mut(message.player) 
+        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player) 
             && can_declare_pon(&hand.0 ,&message.tile) { 
                 lock.0 = true;
 
@@ -677,10 +687,8 @@ pub fn declare_pon(
                 }
                 // this does compile because of non-lexical lifetimes
                 // same with chi and kan
-                for (_, _, mut maybe_riichi) in query.iter_mut() {
-                    if let Some(riichi) = maybe_riichi.as_deref_mut() {
-                        riichi.is_ippatsu_alive = false;
-                    }
+                for player in ippatsu_query.iter() {
+                    commands.entity(player).remove::<Ippatsu>();
                 }
                 commands.entity(message.player).remove::<ClosedHand>();
                 commands.entity(*tile_query).despawn(); 
@@ -716,8 +724,9 @@ pub fn chi_check(
 
 pub fn declare_chi(
     mut messages: MessageReader<DeclareChiMessage>,
-    mut query: Query<(&mut Hand, &mut OpenMentsu, &Jikaze, Option<&mut Riichi>)>,
-    mut tile_query: Single<Entity, With<CurrentDiscard>>,
+    mut query: Query<(&mut Hand, &mut OpenMentsu, &Jikaze)>,
+    ippatsu_query: Query<Entity, With<Ippatsu>>,
+    tile_query: Single<Entity, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut timer: ResMut<CallWindowTimer>,
     mut current_turn: ResMut<CurrentTurn>,
@@ -731,8 +740,8 @@ pub fn declare_chi(
         }
 
         let is_valid = if let (
-            Ok((hand, _, self_jikaze, _)),
-            Ok((_, _, discard_jikaze, _))
+            Ok((hand, _, self_jikaze)),
+            Ok((_, _, discard_jikaze))
         ) = (
             query.get(message.player),
             query.get(message.discarded_by)
@@ -745,7 +754,7 @@ pub fn declare_chi(
             false
         };
 
-        if is_valid && let Ok((mut hand, mut open_mentsu, _, _))= query.get_mut(message.player) {
+        if is_valid && let Ok((mut hand, mut open_mentsu, _))= query.get_mut(message.player) {
             lock.0 = true;
 
             let pos: &ChiTilePos = &message.pos; // let the player choose 
@@ -779,10 +788,8 @@ pub fn declare_chi(
             commands.entity(message.player).remove::<ClosedHand>();
             commands.entity(*tile_query).despawn(); 
             game.calls_made = true;
-            for (_, _, _, mut maybe_riichi) in query.iter_mut() {
-                if let Some(riichi) = maybe_riichi.as_deref_mut() {
-                    riichi.is_ippatsu_alive = false;
-                }
+            for player in ippatsu_query.iter() {
+                commands.entity(player).remove::<Ippatsu>();
             }
             current_turn.0 = message.player;
             next_state.set(TurnState::MainPhase);
@@ -851,7 +858,8 @@ pub fn shouminkan_check(
 
 pub fn declare_kan(
     mut messages: MessageReader<DeclareKanMessage>,
-    mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&mut Riichi>)>,
+    mut query: Query<(&mut Hand, &mut OpenMentsu)>,
+    ippatsu_query: Query<Entity, With<Ippatsu>>,
     tile_query: Query<Entity, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut dead_wall: ResMut<DeadWall>,
@@ -866,7 +874,7 @@ pub fn declare_kan(
             return; 
         } 
 
-        if let Ok((mut hand, mut open_mentsu, _)) = query.get_mut(message.player){
+        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player){
             lock.0 = true;
             let tile = &message.tile;
             let count = can_declare_kan_from_hand(&hand.0, tile);
@@ -914,19 +922,15 @@ pub fn declare_kan(
 
             if kan_successful_type == Some(Kantsu::Ankan) || kan_successful_type == Some(Kantsu::Daiminkan)  {
                 game.calls_made = true;
-                for (_, _, mut maybe_riichi) in query.iter_mut() {
-                    if let Some(riichi) = maybe_riichi.as_deref_mut() {
-                        riichi.is_ippatsu_alive = false;
-                    }
+                for player in ippatsu_query.iter() {
+                    commands.entity(player).remove::<Ippatsu>();
                 }
                 current_turn.0 = message.player;
                 next_state.set(TurnState::RinshanDraw);
                 timer.0.reset();
             } else if kan_successful_type == Some(Kantsu::Shouminkan) {
-                 for (_, _, mut maybe_riichi) in query.iter_mut() {
-                    if let Some(riichi) = maybe_riichi.as_deref_mut() {
-                        riichi.is_ippatsu_alive = false;
-                    }
+                for player in ippatsu_query.iter() {
+                    commands.entity(player).remove::<Ippatsu>();
                 }
                 current_turn.0 = message.player;
                 next_state.set(TurnState::CallWindow);
@@ -1013,7 +1017,7 @@ pub fn draw_tile(
 
     if let Ok((player, _, is_riichi)) = query.get(current_turn.0) 
     && !is_riichi {
-            commands.entity(player).remove::<Furiten>();
+        commands.entity(player).remove::<Furiten>();
     }
     
 
@@ -1042,16 +1046,20 @@ pub fn rinshan_draw(
 
 pub fn discard_tile(
     mut messages: MessageReader<DiscardTileMessage>,
-    mut query: Query<(&mut Hand, &mut DrawnTile, &mut Kawa)>,
+    mut query: Query<(&mut Hand, &mut DrawnTile, &mut Kawa, Option<&mut Riichi>)>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
     mut game: ResMut<GameState>,
     mut dead_wall: ResMut<DeadWall>
 ) {
     for message in messages.read() {
-        if let Ok((mut hand, drawn, mut kawa)) =  query.get_mut(message.player) {
-            
-            if !message.is_tsumogiri { // the opposite should do nothing
+        if let Ok((mut hand, drawn, mut kawa, maybe_riichi)) =  query.get_mut(message.player) {
+            let is_riichi = maybe_riichi.is_some();
+
+            // forced tsumogiri for riichi
+            let final_discard = if is_riichi { drawn.0 } else { message.tile };
+
+            if !is_riichi && !message.is_tsumogiri { // the opposite should do nothing
                 hand.0.push(drawn.0);
                 if let Some(idx) = hand.0.iter().position(|x| *x == message.tile) {
                     hand.0.remove(idx);
@@ -1059,14 +1067,21 @@ pub fn discard_tile(
                 hand.0.sort();
             }
 
-            kawa.0.push(message.tile);
+            kawa.0.push(final_discard);
 
             commands.entity(message.player).remove::<DrawnTile>();
             commands.spawn((
                 CurrentDiscard,
-                DiscardedTile(message.tile),
+                DiscardedTile(final_discard),
                 DiscardedBy(message.player),
             ));
+
+            if let Some(mut riichi) = maybe_riichi {
+                if riichi.turns_since > 0 {
+                    commands.entity(message.player).remove::<Ippatsu>();
+                }
+                riichi.turns_since += 1;
+            }
 
             if game.pending_kan_dora {
                 let new_dora = dead_wall.filler_tiles.remove(0);

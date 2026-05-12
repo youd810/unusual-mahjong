@@ -42,8 +42,6 @@ pub struct Furiten;
 #[derive(Component)]
 pub struct Riichi {
     pub turns_since: u8,
-    pub is_ippatsu_alive: bool,
-    pub is_double: bool,
 }
 
 #[derive(Component)]

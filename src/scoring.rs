@@ -153,7 +153,7 @@ pub fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman
             } else {
                 return ScorePayout {
                     total_won: (yaku_names.len() * 32000) as u32,
-                    oya_pays: (yaku_names.len() * 32000) as u32,
+                    oya_pays: 0,
                     non_oya_pays: (yaku_names.len() * 32000) as u32,
                 }; 
             }
@@ -162,7 +162,9 @@ pub fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman
     }
 
     // https://riichi.wiki/Japanese_mahjong_scoring_rules
-    let mut base: u32 = fu as u32 * 2_u32.pow((han.div_ceil(3) + 2).into()); // TODO: make this work somehow
+    // vanilla: base = fu as u32 * 2_u32.pow((han + 2 ).into());
+    let float_base = fu as f32 * 2_f32.powf((han as f32 / 3.0) + 2.0);
+    let mut base = float_base.round() as u32;
 
     // ! testing
     if base > 2000 || han > 15 || (han >= 12 && fu >= 40) || (han >= 9 && fu >= 70) {
