@@ -93,7 +93,7 @@ impl Wind {
 
 
 #[derive(PartialEq, Eq, Clone, Copy)]
-pub enum ChiTilePos { // tile drawn/discarded
+pub enum ChiTilePos { // tile discarded
     Left,  
     Middle, 
     Right,  

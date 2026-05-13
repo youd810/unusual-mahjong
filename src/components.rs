@@ -111,3 +111,6 @@ pub struct TsumoOption {
 
 #[derive(Component)]
 pub struct DrawnTile(pub Tile);
+
+#[derive(Component)]
+pub struct ForbiddenDiscard(pub Vec<Tile>);

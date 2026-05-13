@@ -482,6 +482,7 @@ pub fn cleanup_main_phase_options(
 ) {
     for entity in &query {
         commands.entity(entity).remove::<TsumoOption>();
+        commands.entity(entity).remove::<ForbiddenDiscard>();
     }
 }
 
@@ -767,6 +768,7 @@ pub fn declare_pon(
                 }
                 commands.entity(message.player).remove::<ClosedHand>();
                 commands.entity(*tile_query).despawn(); 
+                commands.entity(message.player).insert(ForbiddenDiscard(vec![message.tile]));
                 game.calls_made = true;
                 current_turn.0 = message.player;
                 next_state.set(TurnState::MainPhase);
@@ -856,28 +858,56 @@ pub fn declare_chi(
             let tile = &message.tile;
 
             match pos {
-                ChiTilePos::Middle => {
-                    let next = next_tile_sequence(tile).unwrap();
-                    let prev = previous_tile_sequence(tile).unwrap();
-                    // use the variables as a pointer for removal first b4 moving the value 
-                    hand.remove_tile_from_hand(&next);
-                    hand.remove_tile_from_hand(&prev);
-                    open_mentsu.0.push(Mentsu::Shuntsu(vec![prev, *tile, next], false));                         
-                },
-                ChiTilePos::Left => {
-                    let next = next_tile_sequence(tile).unwrap();
-                    let next_next = next_tile_sequence(&next).unwrap();
-                    hand.remove_tile_from_hand(&next);
-                    hand.remove_tile_from_hand(&next_next);
-                    open_mentsu.0.push(Mentsu::Shuntsu(vec![*tile, next, next_next], false));
-                },
-                ChiTilePos::Right => {
-                    let prev = previous_tile_sequence(tile).unwrap();
-                    let prev_prev = previous_tile_sequence(&prev).unwrap();
-                    hand.remove_tile_from_hand(&prev);
-                    hand.remove_tile_from_hand(&prev_prev);
-                    open_mentsu.0.push(Mentsu::Shuntsu(vec![prev_prev, prev, *tile], false));
-                },
+                    ChiTilePos::Middle => {
+                        let next = next_tile_sequence(tile).unwrap();
+                        let prev = previous_tile_sequence(tile).unwrap();
+                        // use the variables as a pointer for removal first b4 moving the value 
+                        hand.remove_tile_from_hand(&next);
+                        hand.remove_tile_from_hand(&prev);
+                        open_mentsu.0.push(Mentsu::Shuntsu(vec![prev, *tile, next], false));   
+                        commands.entity(message.player).insert(ForbiddenDiscard(vec![*tile]));                   
+                    },
+                    ChiTilePos::Left => {
+                        let next = next_tile_sequence(tile).unwrap();
+                        let next_next = next_tile_sequence(&next).unwrap();
+
+                        // https://riichi.wiki/Kuikae
+                        let mut forbidden = vec![];
+                        if hand.0.contains(tile) { 
+                            forbidden.push(*tile); 
+                        }
+                        if let Some(n) = next_tile_sequence(&next_next) { 
+                            forbidden.push(n); 
+                        }
+                        if !forbidden.is_empty() {
+                            commands.entity(message.player).insert(ForbiddenDiscard(forbidden));
+                        }
+
+                        hand.remove_tile_from_hand(&next);
+                        hand.remove_tile_from_hand(&next_next);
+                        open_mentsu.0.push(Mentsu::Shuntsu(vec![*tile, next, next_next], false));
+                        
+                    },
+                    ChiTilePos::Right => {
+                        let prev = previous_tile_sequence(tile).unwrap();
+                        let prev_prev = previous_tile_sequence(&prev).unwrap();
+
+                        let mut forbidden = vec![];
+                        if hand.0.contains(tile) { 
+                            forbidden.push(*tile); 
+                        }
+                        if let Some(p) = previous_tile_sequence(&prev_prev) { 
+                            forbidden.push(p); 
+                        }
+                        if !forbidden.is_empty() {
+                            commands.entity(message.player).insert(ForbiddenDiscard(forbidden));
+                        }
+            
+
+                        hand.remove_tile_from_hand(&prev);
+                        hand.remove_tile_from_hand(&prev_prev);
+                        open_mentsu.0.push(Mentsu::Shuntsu(vec![prev_prev, prev, *tile], false));
+                    },
             }
             
             commands.entity(message.player).remove::<ClosedHand>();
@@ -1190,20 +1220,29 @@ pub fn rinshan_draw(
 }
 
 
+// TODO: ui system (message writer) that greys out forbidden discard tile(s)
+
 pub fn discard_tile(
     mut messages: MessageReader<DiscardTileMessage>,
-    mut query: Query<(&mut Hand, &mut DrawnTile, &mut Kawa, Option<&mut Riichi>)>,
+    mut query: Query<(&mut Hand, &mut DrawnTile, &mut Kawa, Option<&mut Riichi>, Option<&ForbiddenDiscard>)>, // forbidden should be managed by the ui
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
     mut game: ResMut<GameState>,
     mut dead_wall: ResMut<DeadWall>
 ) {
     for message in messages.read() {
-        if let Ok((mut hand, drawn, mut kawa, maybe_riichi)) =  query.get_mut(message.player) {
+        if let Ok((mut hand, drawn, mut kawa, maybe_riichi, maybe_forbidden)) =  query.get_mut(message.player) {
+
+            
+
             let is_riichi = maybe_riichi.is_some();
 
             // forced tsumogiri for riichi
             let final_discard = if is_riichi { drawn.0 } else { message.tile };
+
+            if let Some(forbidden) = maybe_forbidden && forbidden.0.contains(&final_discard) {
+                continue;   
+            }
 
             if !is_riichi && !message.is_tsumogiri { // the opposite should do nothing
                 hand.0.push(drawn.0);
@@ -1237,6 +1276,7 @@ pub fn discard_tile(
                 game.pending_kan_dora = false;
             }
 
+            commands.entity(message.player).remove::<ForbiddenDiscard>();
             next_state.set(TurnState::CallWindow);
 
             println!("{} discards {:?}", message.player, message.tile);
