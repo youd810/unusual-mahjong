@@ -21,12 +21,12 @@ pub fn kokushi_musou(hand: &[Tile]) -> bool {
                 pair_counter += 1;
             }
         }
-        if pair_counter == 1 {
-            return true;
-        } 
-        return false;
+
+        pair_counter == 1 
+
+    } else {
+        false
     }
-    false
 } 
 
 
@@ -45,21 +45,23 @@ pub fn iipeikou(result: &[Mentsu]) -> bool {
             }
         }
     }
-    // for any()
+
     false
 }
 
 
 pub fn ryanpeikou(result: &[Mentsu]) -> bool {
-            let mut shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, true))).collect();
+    let mut shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, true))).collect();
 
-        if shuntsu.len() == 4 {
-            shuntsu.sort();
-            if shuntsu[0] == shuntsu[1] && shuntsu[2] == shuntsu[3] {
-                return true;
-            }
-        }
+    if shuntsu.len() == 4 {
+        shuntsu.sort();
+
+        shuntsu[0] == shuntsu[1] && shuntsu[2] == shuntsu[3] 
+    
+    } else {
         false
+    }
+    
 }
 
 

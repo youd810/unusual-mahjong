@@ -64,6 +64,9 @@ fn main() {
         ).chain())
         .add_systems(Update, (
             tsumo_ui_system,
+            kan_ui_system,
+            riichi_ui_system,
+            kyuushu_ui_system,
             declare_tsumo,
             declare_riichi,
             declare_kyuushu,
@@ -72,7 +75,7 @@ fn main() {
             discard_tile,
         ).run_if(in_state(TurnState::MainPhase))
         .run_if(not(resource_exists::<RoundResult>)))
-        .add_systems(OnExit(TurnState::MainPhase),(check_ryuukyoku, cleanup_main_phase_options).chain())
+        .add_systems(OnExit(TurnState::MainPhase),cleanup_main_phase_options)
         // call window
         .add_systems(OnEnter(TurnState::CallWindow), (
             suufon_renda,
@@ -87,6 +90,9 @@ fn main() {
         ).chain())
         .add_systems(Update, (
             ron_ui_system,
+            pon_ui_system,
+            chi_ui_system,
+            daiminkan_ui_system,
             declare_ron,
             declare_kan,
             declare_pon,
@@ -95,7 +101,7 @@ fn main() {
         ).chain()
         .run_if(in_state(TurnState::CallWindow))
         .run_if(not(resource_exists::<RoundResult>)))
-        .add_systems(OnExit(TurnState::CallWindow), cleanup_call_options)
+        .add_systems(OnExit(TurnState::CallWindow), (check_ryuukyoku, cleanup_call_options).chain())
         // rinshan draw
         .add_systems(OnEnter(TurnState::RinshanDraw), rinshan_draw)
         // advance & end

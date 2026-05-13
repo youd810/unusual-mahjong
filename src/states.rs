@@ -13,6 +13,7 @@ pub enum TurnState {
     RinshanDraw,
     RoundEnd,
     Execution,
+    GameOver,
 }
 
 

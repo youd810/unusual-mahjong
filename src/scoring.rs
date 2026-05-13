@@ -370,7 +370,10 @@ pub fn evaluate_standard(
         eval.total_han += if is_hand_closed { 3 } else { 2 };
     }
 
-    if junchan(result) {
+    if honroutou(combined_hand) {
+        eval.yaku_names.push("Honroutou".to_string());
+        eval.total_han += 2;
+    } else if junchan(result) {
         eval.yaku_names.push("Junchan".to_string());
         eval.total_han += if is_hand_closed { 3 } else { 2 };
     } else if chanta(result) {
@@ -421,11 +424,6 @@ pub fn evaluate_standard(
 
     if shousangen(result) {
         eval.yaku_names.push("Shousangen".to_string());
-        eval.total_han += 2;
-    }
-
-    if honroutou(combined_hand) {
-        eval.yaku_names.push("Honroutou".to_string());
         eval.total_han += 2;
     }
 
