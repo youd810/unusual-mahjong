@@ -240,6 +240,7 @@ pub fn ron_ui_system(
 pub fn declare_ron(
     declared: Query<(Entity, &RonOption, &Jikaze), With<RonDeclared>>,
     undecided: Query<Entity, (With<RonOption>, Without<RonDeclared>)>,
+    alive_check: Query<(), With<Alive>>,
     timer: Res<CallWindowTimer>,
     oya_query: Query<Has<Oya>>,
     jikaze_query: Query<&Jikaze>,
@@ -265,8 +266,10 @@ pub fn declare_ron(
 
     lock.0 = true;
 
+    let player_count = alive_check.iter().count();
+
     // sanchahou
-    if winners.len() >= 3 {
+    if winners.len() == (player_count - 1)  && player_count > 2 {
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
         commands.insert_resource(RoundOutcome {
                     winners: vec![],  
@@ -298,8 +301,9 @@ pub fn declare_ron(
         if let Ok([mut winner_pts, mut loser_pts]) =
             points_query.get_many_mut([*winner, ron_option.discarded_by])
         {
-            winner_pts.0 += score.total_won as i32;
-            loser_pts.0 -= score.total_won as i32;
+            let final_payout = score.total_won as i32 + game.honba as i32 * ((player_count as i32 - 1) * 100);
+            winner_pts.0 += final_payout;
+            loser_pts.0 -= final_payout;
         }
 
         ron_winners.push((*winner, ron_option.result.to_owned()));
@@ -424,6 +428,7 @@ pub fn declare_tsumo(
     mut messages: MessageReader<DeclareTsumoMessage>,
     oya_query: Query<Has<Oya>>,
     mut points_query: Query<(Entity, &mut Points, Has<Oya>), With<Alive>>,
+    alive_check: Query<(), With<Alive>>,
     mut game: ResMut<GameState>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
@@ -432,6 +437,8 @@ pub fn declare_tsumo(
     // because this game is turn based and there can only be 1 message per turn (player turn not jun)
     if let Some(message) = messages.read().next() {
         let is_oya = oya_query.get(message.player).unwrap_or(false);
+
+        let player_count = alive_check.iter().count();
 
         let score = calculate_score(
             message.result.total_han,
@@ -447,12 +454,15 @@ pub fn declare_tsumo(
             if player != message.player {
                 if is_dealer {
                     player_points.0 -= score.oya_pays as i32;
+                    player_points.0 -= game.honba as i32 * 100;
                 } else {
                     player_points.0 -= score.non_oya_pays as i32;
+                   player_points.0 -= game.honba as i32 * 100;
                 }
             } else {
                 player_points.0 += score.total_won as i32;
                 player_points.0 += game.riichi_points as i32;
+                player_points.0 += game.honba as i32 * ((player_count as i32 - 1) * 100);
                 game.riichi_points = 0;
             }
         }
@@ -1404,6 +1414,7 @@ pub fn round_cleanup(
     match result.0 {
         RoundEndReason::OyaWin | RoundEndReason::RyuukyokuOyaTenpai | RoundEndReason::TochuuRyuukyoku => {game.honba += 1},
         RoundEndReason::NonOyaWin | RoundEndReason::RyuukyokuOyaNoten => { 
+            game.honba = 0;
             if game.bakaze == Wind::East && game.rounds == 4 {
                 game.bakaze = Wind::South;
                 game.rounds = 1;
