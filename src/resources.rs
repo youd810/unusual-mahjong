@@ -19,8 +19,8 @@ pub struct GameState {
 #[derive(Resource)]
 pub struct CurrentTurn(pub Entity); // id of the current tsumo
 
-#[derive(Resource)]
-pub struct CallWindowTimer(pub Timer);
+// #[derive(Resource)]
+// pub struct CallWindowTimer(pub Timer);
 
 
 #[derive(Resource)]

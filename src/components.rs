@@ -6,6 +6,9 @@ use crate::scoring::*;
 pub struct PlayerTag;
 
 #[derive(Component)]
+pub struct HumanPlayer;
+
+#[derive(Component)]
 pub struct Jikaze(pub Wind);
 
 #[derive(Component)]

@@ -5,10 +5,10 @@ use crate::resources::*;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub enum Tile {
-    Honor(Honor),
     Man(u8),
     Pin(u8),
     Sou(u8),
+    Honor(Honor),
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
