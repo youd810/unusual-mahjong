@@ -24,7 +24,7 @@ pub fn human_discard_ui_system(
         .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -50.0))
         .collapsible(false)
         .resizable(false)
-        .title_bar(false) // Cleaner look
+        .title_bar(false)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 // Render tiles in hand
@@ -42,7 +42,7 @@ pub fn human_discard_ui_system(
                     });
                 }
 
-                // Render the newly drawn tile slightly separated
+                // separate drawn tile 
                 if let Some(drawn) = maybe_drawn {
                     ui.separator();
                     let drawn_name = format!("{:?}", drawn.0);

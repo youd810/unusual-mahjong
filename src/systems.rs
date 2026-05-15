@@ -7,13 +7,19 @@ use crate::scoring::*;
 use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
-
+// Encountered an error in system `game::systems::build_shot_queue`: Parameter `Res<'_, RoundOutcome>` failed validation: Resource does not exist
+// TODO: RoundOutcome for tenpai!!
 pub fn build_shot_queue(
-    outcome: Res<RoundOutcome>,
+    outcome: Option<Res<RoundOutcome>>,
     oya_query: Query<Entity, With<Oya>>,
     mut commands: Commands,
     mut next_step: ResMut<NextState<ExecutionSubState>>,
 ) {
+    let Some(outcome) = outcome else {
+        next_step.set(ExecutionSubState::Processing);
+        return;
+    };
+
     let mut queue: Vec<Execute> = vec![];
     let mut needs_selection = false;
     let mut selection_shooter = Entity::PLACEHOLDER;
@@ -148,6 +154,7 @@ pub fn check_ryuukyoku(
     }
 
     if wall.0.is_empty() {
+        println!("Ryuukyoku! Wall exhausted. Oya tenpai: {}", *oya_tenpai_query);
         if *oya_tenpai_query {
             commands.insert_resource(RoundResult(RoundEndReason::RyuukyokuOyaTenpai));
         } else {
@@ -215,6 +222,7 @@ pub fn ron_check(
                 discarded_by: discarded_by.0,
                 result,
             });
+            println!("{} has Ron option on {:?}", player, discarded_tile.0);
         }
     }
 }
@@ -249,11 +257,11 @@ pub fn declare_ron(
     if winners.len() == (player_count - 1)  && player_count > 2 {
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
         commands.insert_resource(RoundOutcome {
-                    winners: vec![],  
-                    loser: Some(winners[0].1.discarded_by),             
-                    is_tsumo: false,
-                    tochuu_causer: winners.iter().map(|(e, _, _)| *e).collect(),
-                });
+            winners: vec![],  
+            loser: Some(winners[0].1.discarded_by),             
+            is_tsumo: false,
+            tochuu_causer: winners.iter().map(|(e, _, _)| *e).collect(),
+        });
         next_state.set(TurnState::RoundEnd);
         return;
     }
@@ -284,6 +292,12 @@ pub fn declare_ron(
         }
 
         ron_winners.push((*winner, ron_option.result.to_owned()));
+
+        println!("{} declares Ron on {}! {:?} - {}han {}fu - {} points",
+            winner, ron_option.discarded_by, ron_option.result.yaku_names,
+            ron_option.result.total_han, ron_option.result.total_fu,
+            score.total_won
+        );
     }
 
     commands.insert_resource(RoundOutcome{
@@ -444,6 +458,12 @@ pub fn declare_tsumo(
             }
         }
 
+        println!("{} declares Tsumo! {:?} - {}han {}fu - {} points",
+            message.player, message.result.yaku_names,
+            message.result.total_han, message.result.total_fu,
+            score.total_won
+        );
+
         commands.insert_resource(RoundOutcome{
             winners: vec![(message.player, message.result.to_owned())],  
             loser: None,       
@@ -482,6 +502,7 @@ pub fn set_tenpai(
     for (entity, hand) in &query {
         let waiting_on = check_tenpai(&hand.0);
         if !waiting_on.is_empty() {
+            println!("{} is tenpai, waiting on: {:?}", entity, waiting_on);
             commands.entity(entity).insert(Tenpai(waiting_on));
         } else {
             commands.entity(entity).remove::<Tenpai>();
@@ -501,6 +522,7 @@ pub fn tenpai_payout_system(mut query: Query<(&mut Points, Has<Tenpai>), With<Al
             _ => {}
         }
     }
+    println!("Tenpai payout: {} players tenpai", tenpai_count);
 }
 
 
@@ -547,6 +569,7 @@ pub fn declare_kyuushu(
             let mut combined = hand.0.to_owned();
             combined.push(drawn.0.to_owned());
             if can_declare_kyuushu(&combined, game.calls_made, kawa) {
+                println!("{} declares Kyuushu Kyuuhai!", message.player);
                 commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
                 next_state.set(TurnState::RoundEnd);
             }
@@ -570,6 +593,7 @@ pub fn suufon_renda(
             if matches!(first_tile, Tile::Honor(Honor::East | Honor::South | Honor::West | Honor::North))
                 && four_kawa.iter().all(|kawa| kawa.0[0] == first_tile)
             {
+                println!("Suufon Renda! All four players discarded {:?}", first_tile);
                 commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
                 commands.insert_resource(RoundOutcome {
                     winners: vec![],  
@@ -591,6 +615,7 @@ pub fn suucha_riichi(
     mut next_state: ResMut<NextState<TurnState>>
 ) {
     if query.count() == 4 {
+        println!("Suucha Riichi! All four players declared Riichi");
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
         commands.insert_resource(RoundOutcome {
                     winners: vec![],  
@@ -612,6 +637,7 @@ pub fn suukaikan(
     let (players_with_kan, total_kan) = player_and_total_kan_count(&query);
 
     if total_kan >= 4 && players_with_kan > 1 {
+        println!("Suukaikan! {} kans across {} players", total_kan, players_with_kan);
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
         commands.insert_resource(RoundOutcome {
                     winners: vec![],  
@@ -670,6 +696,9 @@ pub fn declare_riichi(
                 ));
                 if is_double {
                     commands.entity(message.player).insert(DoubleRiichi);
+                    println!("{} declares Double Riichi!", message.player);
+                } else {
+                    println!("{} declares Riichi!", message.player);
                 }
                 points.0 -= 1000;
                 game.riichi_points += 1000;
@@ -687,6 +716,7 @@ pub fn pon_check(
     for (player, hand) in &query {
         if player == discarded_by.0 { continue; }
         if can_declare_pon(&hand.0, &tile.0) {
+            println!("{} has Pon option on {:?}", player, tile.0);
             commands.entity(player).insert(PonOption(tile.0));
         }
     }
@@ -714,6 +744,7 @@ pub fn declare_pon(
                 lock.0 = true;
 
                 open_mentsu.0.push(Mentsu::Koutsu(vec![message.tile; 3], false));
+                println!("{} declares Pon on {:?}", message.player, message.tile);
                 for _ in 0..2 {
                     let idx = hand.0.iter().position(|x| *x == message.tile).unwrap();
                     hand.0.remove(idx);
@@ -749,6 +780,7 @@ pub fn chi_check(
         if !jikaze.0.is_kamicha_to(&discarder_jikaze.0) { continue; }
         let positions = can_declare_chi(&hand.0, &tile.0);
         if !positions.is_empty() {
+            println!("{} has Chi option on {:?} (positions: {:?})", player, tile.0, positions);
             commands.entity(player).insert(ChiOption { tile: tile.0, positions });
         }
     }
@@ -794,6 +826,7 @@ pub fn declare_chi(
 
             match pos {
                     ChiTilePos::Middle => {
+                        println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
                         let next = next_tile_sequence(tile).unwrap();
                         let prev = previous_tile_sequence(tile).unwrap();
                         // use the variables as a pointer for removal first b4 moving the value 
@@ -803,6 +836,7 @@ pub fn declare_chi(
                         commands.entity(message.player).insert(ForbiddenDiscard(vec![*tile]));                   
                     },
                     ChiTilePos::Left => {
+                        println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
                         let next = next_tile_sequence(tile).unwrap();
                         let next_next = next_tile_sequence(&next).unwrap();
 
@@ -824,6 +858,7 @@ pub fn declare_chi(
                         
                     },
                     ChiTilePos::Right => {
+                        println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
                         let prev = previous_tile_sequence(tile).unwrap();
                         let prev_prev = previous_tile_sequence(&prev).unwrap();
 
@@ -998,6 +1033,13 @@ pub fn declare_kan(
             let count = can_declare_kan_from_hand(&hand.0, tile);
             let mut kan_successful_type: Option<Kantsu> = None;
 
+            match kan_successful_type {
+                Some(Kantsu::Ankan) => println!("{} declares Ankan on {:?}", message.player, tile),
+                Some(Kantsu::Daiminkan) => println!("{} declares Daiminkan on {:?}", message.player, tile),
+                Some(Kantsu::Shouminkan) => println!("{} declares Shouminkan on {:?}", message.player, tile),
+                None => println!("{} attempted Kan on {:?} but failed", message.player, tile),
+            }
+
             if message.is_discard && count == 3 {
                 open_mentsu.0.push(Mentsu::Daiminkan(vec![*tile; 4]));
                 hand.0.retain(|x| x != tile);
@@ -1167,6 +1209,7 @@ pub fn rinshan_draw(
     game.pending_rinshan = false;
 
     let drawn = dead_wall.rinshan_tiles.remove(0);
+    println!("{} draws {:?} from rinshan", current_turn.0, drawn);
 
     commands.entity(current_turn.0).insert(DrawnTile(drawn));
     dead_wall.filler_tiles.push(wall.0.pop().unwrap());
@@ -1204,6 +1247,7 @@ pub fn discard_tile(
             };
 
             if let Some(forbidden) = maybe_forbidden && forbidden.0.contains(&final_discard) {
+                println!("kuikae nashi on {:?}", final_discard);
                 continue; // ! greyed out tiles
             }
 
@@ -1264,8 +1308,11 @@ pub fn next_turn(
     mut current_turn: ResMut<CurrentTurn>,
     query: Query<(Entity, &Jikaze), With<Alive>>,
     mut game: ResMut<GameState>,
+    round_result: Option<Res<RoundResult>>,
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
+    if round_result.is_some() { return; }
+
     if let Ok((_, current_jikaze)) = query.get(current_turn.0) {
         let mut wind = current_jikaze.0.next_turn_wind();
         for _ in 0..3 {
@@ -1273,6 +1320,7 @@ pub fn next_turn(
                 current_turn.0 = player;
                 next_state.set(TurnState::Draw);
                 game.pending_rinshan = false;
+                println!("Turn advances to {}", current_turn.0);
                 return;
             }
             wind = wind.next_turn_wind();
@@ -1321,10 +1369,12 @@ pub fn auto_advance_call_window(
         }
         commands.entity(discard_entity).despawn();
     }
-
+    
     if game.pending_rinshan {
+        println!("Call window passed, advancing to rinshan draw");
         next_state.set(TurnState::RinshanDraw);
     } else {
+        println!("Call window passed, advancing turn");
         next_state.set(TurnState::AdvanceTurn);
     }
 }
@@ -1334,14 +1384,15 @@ pub fn start_round(
     mut query: Query<&mut Hand, With<Alive>>,
     alive_check: Query<(), With<Alive>>,
     mut commands: Commands,
-    mut next_state: ResMut<NextState<TurnState>>
+    mut next_state: ResMut<NextState<TurnState>>,
+    game: Res<GameState>
 ) {
     if alive_check.iter().count() <= 1 {
         println!("ゲーム終了");
         next_state.set(TurnState::GameOver);
         return;
     }
-
+    println!("--- New Round: {} Bakaze: {:?}, Honba: {} ---", game.rounds, game.bakaze, game.honba);
     let mut wall = vec![];
     for _ in 0..4 {
         wall.extend(all_tiles());
@@ -1375,6 +1426,13 @@ pub fn round_cleanup(
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
+    match &result.0 {
+        RoundEndReason::OyaWin => println!("Round end: Oya win (renchan)"),
+        RoundEndReason::NonOyaWin => println!("Round end: Non-oya win"),
+        RoundEndReason::RyuukyokuOyaTenpai => println!("Round end: Ryuukyoku (oya tenpai, renchan)"),
+        RoundEndReason::RyuukyokuOyaNoten => println!("Round end: Ryuukyoku (oya noten)"),
+        RoundEndReason::TochuuRyuukyoku => println!("Round end: Tochuu ryuukyoku"),
+    }
     match result.0 {
         RoundEndReason::OyaWin | RoundEndReason::RyuukyokuOyaTenpai | RoundEndReason::TochuuRyuukyoku => {game.honba += 1},
         RoundEndReason::NonOyaWin | RoundEndReason::RyuukyokuOyaNoten => { 

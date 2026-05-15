@@ -111,11 +111,11 @@ fn main() {
             call_window_ui_system,
         ).run_if(in_state(TurnState::CallWindow))
         .run_if(not(resource_exists::<RoundResult>)))
-        .add_systems(OnExit(TurnState::CallWindow), (check_ryuukyoku, cleanup_call_options).chain())
+        .add_systems(OnExit(TurnState::CallWindow), cleanup_call_options)
         // rinshan draw
         .add_systems(OnEnter(TurnState::RinshanDraw), rinshan_draw)
         // advance & end
-        .add_systems(OnEnter(TurnState::AdvanceTurn), next_turn)
+        .add_systems(OnEnter(TurnState::AdvanceTurn), (check_ryuukyoku, next_turn).chain())
         .add_systems(OnEnter(TurnState::RoundEnd), (
             tenpai_payout_system
                 .run_if(|result: Res<RoundResult>| matches!(result.0,

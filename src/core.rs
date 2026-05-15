@@ -40,7 +40,7 @@ pub enum Kantsu {
     Shouminkan,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Wind {
     East,
     South,
@@ -92,7 +92,7 @@ impl Wind {
 }
 
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ChiTilePos { // tile discarded
     Left,  
     Middle, 
