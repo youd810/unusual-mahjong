@@ -1,3 +1,5 @@
+// TODO: create a function + ui to instantly form a yaku for testing
+
 use crate::core::*;
 use crate::components::*;
 use crate::resources::*;
@@ -7,8 +9,7 @@ use crate::scoring::*;
 use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
-// Encountered an error in system `game::systems::build_shot_queue`: Parameter `Res<'_, RoundOutcome>` failed validation: Resource does not exist
-// TODO: RoundOutcome for tenpai!!
+
 pub fn build_shot_queue(
     outcome: Option<Res<RoundOutcome>>,
     oya_query: Query<Entity, With<Oya>>,
@@ -397,24 +398,6 @@ pub fn tsumo_check(
 }
 
 
-pub fn tsumo_ui_system(
-    query: Query<(Entity, &TsumoOption)>,
-    mut messages: MessageWriter<DeclareTsumoMessage>,
-    // ! + ui input stuff
-) {
-    for (entity, tsumo_option) in &query {
-        // TODO: show tsumo button
-        let clicked = false; // !placeholder
-        if clicked {
-            messages.write(DeclareTsumoMessage {
-                player: entity,
-                result: tsumo_option.result.clone(),
-            });
-        }
-    }
-}
-
-
 pub fn declare_tsumo(
     mut messages: MessageReader<DeclareTsumoMessage>,
     oya_query: Query<Has<Oya>>,
@@ -490,6 +473,7 @@ pub fn cleanup_main_phase_options(
     for entity in &query {
         commands.entity(entity).remove::<TsumoOption>();
         commands.entity(entity).remove::<ForbiddenDiscard>();
+        commands.entity(entity).remove::<RiichiSelecting>();
     }
 }
 
@@ -537,20 +521,6 @@ pub fn kyuushu_check(
         combined.push(drawn.0);
         if can_declare_kyuushu(&combined, game.calls_made, kawa) {
             commands.entity(current_turn.0).insert(KyuushuOption);
-        }
-    }
-}
-
-
-pub fn kyuushu_ui_system(
-    query: Query<Entity, With<KyuushuOption>>,
-    mut messages: MessageWriter<DeclareKyuushuMessage>,
-) {
-    for entity in &query {
-        // TODO: show kyuushu button
-        let clicked = false; // placeholder
-        if clicked {
-            messages.write(DeclareKyuushuMessage { player: entity });
         }
     }
 }
@@ -652,57 +622,95 @@ pub fn suukaikan(
 
 pub fn riichi_check(
     current_turn: Res<CurrentTurn>,
-    query: Query<(&Hand, &Points, Has<ClosedHand>, Has<Riichi>)>,
+    query: Query<(&Hand, &DrawnTile, &Points, Has<ClosedHand>, Has<Riichi>)>,
     wall: Res<Wall>,
     mut commands: Commands,
 ) {
-    if let Ok((hand, points, is_closed, is_riichi)) = query.get(current_turn.0) {
-        if can_declare_riichi(&hand.0, is_closed, is_riichi, points.0, &*wall) {
-            commands.entity(current_turn.0).insert(RiichiOption);
+    if let Ok((hand, drawn, points, is_closed, is_riichi)) = query.get(current_turn.0) {
+        if is_riichi || !is_closed || points.0 < 1000 || wall.0.len() < 4 {
+            return;
         }
-    }
-}
 
+        let mut full_hand = hand.0.clone();
+        full_hand.push(drawn.0);
 
-pub fn riichi_ui_system(
-    query: Query<Entity, With<RiichiOption>>,
-    mut messages: MessageWriter<DeclareRiichiMessage>,
-) {
-    for entity in &query {
-        // TODO: show riichi button
-        // TODO: also what valid tile(s) to discard
-        let clicked = false; // placeholder
-        if clicked {
-            messages.write(DeclareRiichiMessage { player: entity });
+        let mut valid_discards = vec![];
+        let mut seen = vec![];
+
+        for (i, tile) in full_hand.iter().enumerate() {
+            if seen.contains(tile) { continue; }
+            seen.push(*tile);
+
+            let mut remaining = full_hand.clone();
+            remaining.remove(i);
+
+            if !check_tenpai(&remaining).is_empty() {
+                valid_discards.push(*tile);
+            }
+        }
+
+        if !valid_discards.is_empty() {
+            commands.entity(current_turn.0).insert(RiichiOption(valid_discards));
         }
     }
 }
 
 
 pub fn declare_riichi(
-    mut messages: MessageReader<DeclareRiichiMessage>, // store the entity id
-    mut query: Query<(Has<ClosedHand>, Has<Riichi>, &Hand, &mut Points, &Kawa)>, // store the data
-    wall: Res<Wall>,
+    mut messages: MessageReader<DeclareRiichiMessage>,
+    mut query: Query<(&mut Hand, &mut Points, &mut Kawa, Option<&DrawnTile>, &RiichiOption)>,
     mut game: ResMut<GameState>,
+    mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
 ) {
     for message in messages.read() {
-        if let Ok((is_closed, is_riichi, hand, mut points, kawa)) = query.get_mut(message.player) 
-            && can_declare_riichi(&hand.0, is_closed, is_riichi, points.0, &*wall) {
-                let is_double = kawa.0.is_empty() && !game.calls_made;
-                commands.entity(message.player).insert((
-                    Riichi { turns_since: 0 },
-                    Ippatsu,
-                ));
-                if is_double {
-                    commands.entity(message.player).insert(DoubleRiichi);
-                    println!("{} declares Double Riichi!", message.player);
-                } else {
-                    println!("{} declares Riichi!", message.player);
-                }
-                points.0 -= 1000;
-                game.riichi_points += 1000;
+        if let Ok((mut hand, mut points, mut kawa, maybe_drawn, riichi_option)) = query.get_mut(message.player) {
+            if !riichi_option.0.contains(&message.tile) {
+                println!("{} tried to riichi-discard {:?} but it's not valid", message.player, message.tile);
+                continue;
             }
+
+            let is_double = kawa.0.is_empty() && !game.calls_made;
+
+            // Handle the discard
+            if let Some(drawn) = maybe_drawn {
+                if message.tile != drawn.0 {
+                    hand.0.push(drawn.0);
+                    if let Some(idx) = hand.0.iter().position(|x| *x == message.tile) {
+                        hand.0.remove(idx);
+                    }
+                }
+                commands.entity(message.player).remove::<DrawnTile>();
+            } else {
+                if let Some(idx) = hand.0.iter().position(|x| *x == message.tile) {
+                    hand.0.remove(idx);
+                }
+            }
+            hand.0.sort();
+            kawa.0.push(message.tile);
+
+            commands.entity(message.player).insert((
+                Riichi { turns_since: 0 },
+                Ippatsu,
+            ));
+            if is_double {
+                commands.entity(message.player).insert(DoubleRiichi);
+            }
+
+            commands.spawn((
+                CurrentDiscard,
+                DiscardedTile(message.tile),
+                DiscardedBy(message.player),
+            ));
+
+            points.0 -= 1000;
+            game.riichi_points += 1000;
+
+            println!("{} declares {}Riichi, discards {:?}",
+                message.player, if is_double { "Double " } else { "" }, message.tile);
+
+            next_state.set(TurnState::CallWindow);
+        }
     }
 }
 
@@ -983,28 +991,6 @@ pub fn shouminkan_check(
         }
         if !kan_tiles.is_empty() {
             commands.entity(current_turn.0).insert(ShouminkanOption(kan_tiles));
-        }
-    }
-}
-
-
-pub fn kan_ui_system( // ankan and shouminkan
-    ankan_query: Query<(Entity, &AnkanOption)>,
-    shouminkan_query: Query<(Entity, &ShouminkanOption)>,
-    mut messages: MessageWriter<DeclareKanMessage>,
-) {
-    for (entity, option) in &ankan_query {
-        // TODO: show kan button, 4 face-down tiles
-        let clicked: Option<Tile> = None;
-        if let Some(tile) = clicked {
-            messages.write(DeclareKanMessage { player: entity, tile, is_discard: false });
-        }
-    }
-    for (entity, option) in &shouminkan_query {
-        // TODO: show kan button, add tile to existing pon
-        let clicked: Option<Tile> = None;
-        if let Some(tile) = clicked {
-            messages.write(DeclareKanMessage { player: entity, tile, is_discard: false });
         }
     }
 }
@@ -1409,13 +1395,14 @@ pub fn start_round(
     for mut hand in query {
         let starting_hand: Vec<Tile> = wall.drain(wall.len() - 13..).collect();
         hand.0 = starting_hand;
+        hand.0.sort();
     }
 
     commands.insert_resource(Wall(wall));
     next_state.set(TurnState::Draw);
 }
 
-
+// TODO: Parameter `ResMut<'_, ExecuteQueue>` failed validation: Resource does not exist
 pub fn round_cleanup(
     mut query: Query<(Entity, &mut Jikaze, Has<Oya>)>,
     alive_query: Query<&Alive>,
@@ -1425,6 +1412,7 @@ pub fn round_cleanup(
     mut game: ResMut<GameState>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
+    outcome: Option<Res<RoundOutcome>>
 ) {
     match &result.0 {
         RoundEndReason::OyaWin => println!("Round end: Oya win (renchan)"),
@@ -1502,5 +1490,10 @@ pub fn round_cleanup(
     game.pending_rinshan = false;
 
     commands.remove_resource::<RoundResult>();
-    next_state.set(TurnState::Execution);
+
+    if outcome.is_some() {
+        next_state.set(TurnState::Execution);
+    } else {
+        next_state.set(TurnState::StartNewRound);
+    }
 }

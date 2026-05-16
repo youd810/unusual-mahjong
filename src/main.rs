@@ -1,9 +1,5 @@
 // TODO remaining todos
-// Dora counting (not a yaku but affects scoring) (Done?)
-// Fu calculation (done?)
-// Han → Score conversion table (done?)
 // custom yaku and rules later
-// ? 途中流局 (done?)
 // ! ai behavior (priority: call/naki resolving logic)
 
 
@@ -76,10 +72,7 @@ fn main() {
         .run_if(not(resource_exists::<RoundResult>)))
         // main phase ui
         .add_systems(EguiPrimaryContextPass, (
-            tsumo_ui_system,
-            kan_ui_system,
-            riichi_ui_system,
-            kyuushu_ui_system,
+            main_phase_ui_system,
             human_discard_ui_system,
         ).run_if(in_state(TurnState::MainPhase))
         .run_if(not(resource_exists::<RoundResult>)))
@@ -102,7 +95,6 @@ fn main() {
             declare_pon,
             declare_chi,
             auto_advance_call_window,
-            //call_window_timeout,
         ).chain()
         .run_if(in_state(TurnState::CallWindow))
         .run_if(not(resource_exists::<RoundResult>)))
@@ -128,9 +120,5 @@ fn main() {
         .add_systems(Update, select_targets.run_if(in_state(ExecutionSubState::SelectTargets)))
         .add_systems(OnEnter(ExecutionSubState::Processing), process_shot_queue)
         .run();
-
-
-
-    // TODO: logical sorting when player picks up a tile (or not?)
     
 }

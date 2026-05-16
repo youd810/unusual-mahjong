@@ -25,7 +25,8 @@ pub struct DeclareKanMessage {
 
 #[derive(Message)]
 pub struct DeclareRiichiMessage {
-    pub player: Entity,       
+    pub player: Entity,
+    pub tile: Tile,
 }
 
 

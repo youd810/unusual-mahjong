@@ -89,7 +89,10 @@ pub struct AnkanOption(pub Vec<Tile>);
 pub struct ShouminkanOption(pub Vec<Tile>);
 
 #[derive(Component)]
-pub struct RiichiOption;
+pub struct RiichiOption(pub Vec<Tile>);
+
+#[derive(Component)]
+pub struct RiichiSelecting;
 
 #[derive(Component)]
 pub struct KyuushuOption;
