@@ -11,15 +11,11 @@ use rand::seq::SliceRandom;
 
 
 pub fn build_shot_queue(
-    outcome: Option<Res<RoundOutcome>>,
+    outcome: Res<RoundOutcome>,
     oya_query: Query<Entity, With<Oya>>,
     mut commands: Commands,
     mut next_step: ResMut<NextState<ExecutionSubState>>,
 ) {
-    let Some(outcome) = outcome else {
-        next_step.set(ExecutionSubState::Processing);
-        return;
-    };
 
     let mut queue: Vec<Execute> = vec![];
     let mut needs_selection = false;
@@ -467,13 +463,18 @@ pub fn declare_tsumo(
 
 // cleanup so player doesn't prepetually qualify for tsumo
 pub fn cleanup_main_phase_options(
-    query: Query<Entity, With<TsumoOption>>,
+    query: Query<Entity, Or<(With<TsumoOption>, With<RiichiOption>, With<AnkanOption>, With<ShouminkanOption>, With<KyuushuOption>, With<ForbiddenDiscard>, With<RiichiSelecting>)>>,
     mut commands: Commands,
 ) {
     for entity in &query {
-        commands.entity(entity).remove::<TsumoOption>();
-        commands.entity(entity).remove::<ForbiddenDiscard>();
-        commands.entity(entity).remove::<RiichiSelecting>();
+        commands.entity(entity)
+            .remove::<TsumoOption>()
+            .remove::<RiichiOption>()
+            .remove::<AnkanOption>()
+            .remove::<ShouminkanOption>()
+            .remove::<KyuushuOption>()
+            .remove::<ForbiddenDiscard>()
+            .remove::<RiichiSelecting>();
     }
 }
 
@@ -998,7 +999,7 @@ pub fn shouminkan_check(
 
 pub fn declare_kan(
     mut messages: MessageReader<DeclareKanMessage>,
-    mut query: Query<(&mut Hand, &mut OpenMentsu)>,
+    mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&DrawnTile>)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
     tile_query: Query<Entity, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
@@ -1013,18 +1014,16 @@ pub fn declare_kan(
             return; 
         } 
 
-        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player){
+        if let Ok((mut hand, mut open_mentsu, maybe_drawn)) = query.get_mut(message.player){
             lock.0 = true;
             let tile = &message.tile;
-            let count = can_declare_kan_from_hand(&hand.0, tile);
+            let mut full_hand = hand.0.to_owned();
+            if let Some(drawn) = maybe_drawn {
+                full_hand.push(drawn.0);
+            }
+            let count = can_declare_kan_from_hand(&full_hand, tile);
             let mut kan_successful_type: Option<Kantsu> = None;
 
-            match kan_successful_type {
-                Some(Kantsu::Ankan) => println!("{} declares Ankan on {:?}", message.player, tile),
-                Some(Kantsu::Daiminkan) => println!("{} declares Daiminkan on {:?}", message.player, tile),
-                Some(Kantsu::Shouminkan) => println!("{} declares Shouminkan on {:?}", message.player, tile),
-                None => println!("{} attempted Kan on {:?} but failed", message.player, tile),
-            }
 
             if message.is_discard && count == 3 {
                 open_mentsu.0.push(Mentsu::Daiminkan(vec![*tile; 4]));
@@ -1066,6 +1065,13 @@ pub fn declare_kan(
                         break;
                     } 
                 }
+            }
+
+            match kan_successful_type {
+                Some(Kantsu::Ankan) => println!("{} declares Ankan on {:?}", message.player, tile),
+                Some(Kantsu::Daiminkan) => println!("{} declares Daiminkan on {:?}", message.player, tile),
+                Some(Kantsu::Shouminkan) => println!("{} declares Shouminkan on {:?}", message.player, tile),
+                None => println!("{} attempted Kan on {:?} but failed", message.player, tile),
             }
 
             if kan_successful_type == Some(Kantsu::Ankan) || kan_successful_type == Some(Kantsu::Daiminkan)  {

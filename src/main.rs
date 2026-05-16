@@ -32,6 +32,7 @@ fn main() {
         .add_plugins(EguiPlugin::default())
         .init_resource::<CallLock>()
         .init_state::<TurnState>()
+        .add_systems(EguiPrimaryContextPass, (info_display_ui_system).run_if(resource_exists::<Wall>))
         // messages
         .add_message::<DiscardTileMessage>()
         .add_message::<DeclarePonMessage>()
@@ -40,6 +41,7 @@ fn main() {
         .add_message::<DeclareRiichiMessage>()
         .add_message::<DeclareTsumoMessage>()
         .add_message::<DeclareKyuushuMessage>()
+        
         // setup (first round)
         .add_systems(OnEnter(TurnState::Setup), (
             start_game,

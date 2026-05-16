@@ -4,7 +4,7 @@ use crate::components::*;
 use crate::messages::*;
 use crate::resources::*;
 use crate::core::*;
-
+use crate::scoring;
 
 pub fn human_discard_ui_system(
     mut contexts: EguiContexts,
@@ -183,7 +183,6 @@ pub fn main_phase_ui_system(
                         kyuushu_writer.write(DeclareKyuushuMessage { player });
                     }
 
-
                     if ui.button("Skip").clicked() {
                         commands.entity(player)
                             .remove::<TsumoOption>()
@@ -195,4 +194,103 @@ pub fn main_phase_ui_system(
                 });
             });
     }
+}
+
+
+pub fn info_display_ui_system(
+    mut contexts: EguiContexts,
+    game: Res<GameState>,
+    wall: Res<Wall>,
+    dead_wall: Res<DeadWall>,
+    current_turn: Res<CurrentTurn>,
+    player_query: Query<(
+        Entity,
+        &Points,
+        &Jikaze,
+        &Kawa,
+        &OpenMentsu,
+        Has<HumanPlayer>,
+        Has<Riichi>,
+        Has<Oya>,
+        Has<Alive>,
+    ), With<PlayerTag>>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    // round info
+    egui::Window::new("Round Info")
+        .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 10.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label(format!("{:?} {} | Honba: {} | Wall: {}",
+                game.bakaze, game.rounds, game.honba, wall.0.len()));
+            ui.label(format!("Riichi pool: {}", game.riichi_points));
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Dora:");
+                for indicator in &dead_wall.dora_indicators {
+                    let dora = crate::scoring::get_dora_from_indicator(indicator);
+                    ui.label(format!("{:?}", dora));
+                }
+            });
+        });
+
+    // players
+    let mut players: Vec<_> = player_query.iter().collect();
+    players.sort_by_key(|(_, _, jikaze, _, _, _, _, _, _)| jikaze.0.to_num());
+
+    egui::Window::new("Players")
+        .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 120.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            for (player, points, jikaze, kawa, open, is_human, is_riichi, is_oya, is_alive) in &players {
+                let is_current = *player == current_turn.0;
+
+                let mut label = String::new();
+                label += &format!("{:?}", player);
+                if is_current { label += "('s turn)"; }
+                label += &format!(" {:?}", jikaze.0);
+                if *is_oya { label += " (Oya)"; }
+                if *is_human { label += " (You)"; }
+                if *is_riichi { label += " (In Riichi)"; }
+                if !*is_alive { label += " *ded*"; }
+                label += &format!(" — {}pts", points.0);
+
+                egui::CollapsingHeader::new(label)
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        // open mentsu
+                        if !open.0.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Naki:");
+                                for mentsu in &open.0 {
+                                    let text = match mentsu {
+                                        Mentsu::Koutsu(t, _) => format!("Pon{:?}", t),
+                                        Mentsu::Shuntsu(t, _) => format!("Chi{:?}", t),
+                                        Mentsu::Ankan(t) => format!("Ankan{:?}", &t[..1]),
+                                        Mentsu::Daiminkan(t) => format!("Dkan{:?}", &t[..1]),
+                                        Mentsu::Shouminkan(t) => format!("Skan{:?}", &t[..1]),
+                                        Mentsu::Jantou(_) => String::new(),
+                                    };
+                                    if !text.is_empty() { ui.label(text); }
+                                }
+                            });
+                        }
+
+                        // kawa
+                        if !kawa.0.is_empty() {
+                            ui.label("Kawa:");
+                            for chunk in kawa.0.chunks(6) {
+                                ui.horizontal(|ui| {
+                                    for tile in chunk {
+                                        ui.label(format!("{:?}", tile));
+                                    }
+                                });
+                            }
+                        }
+                    });
+            }
+        });
 }
