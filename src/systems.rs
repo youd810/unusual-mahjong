@@ -98,11 +98,20 @@ pub fn select_targets(
 pub fn process_shot_queue(
     mut queue: ResMut<ExecuteQueue>,
     mut revolver: ResMut<Revolver>,
+    human_query: Query<Has<HumanPlayer>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
+    
     for shot in queue.0.drain(..) {
+        let is_human = human_query.get(shot.target).unwrap_or(false);
+        println!("{} shoots at {} (chamber {}/{})",
+            shot.shooter, shot.target, revolver.chamber, revolver.bullet);
+
         if revolver.pull() {
+            println!("BANG! {} is eliminated!{}", shot.target,
+                if is_human { " (HUMAN)" } else { "" });
+
             commands.entity(shot.target).remove::<Alive>();
             commands.entity(shot.target).remove::<Hand>();
             commands.entity(shot.target).remove::<OpenMentsu>();
@@ -126,8 +135,20 @@ pub fn process_shot_queue(
             commands.entity(shot.target).remove::<RiichiOption>();
             commands.entity(shot.target).remove::<KyuushuOption>();  
 
+            if is_human {
+                println!("ゲーム終了\nYou died.");
+                commands.remove_resource::<ExecuteQueue>();
+                commands.remove_resource::<PendingTargetSelection>();
+                commands.remove_resource::<RoundOutcome>();
+                next_state.set(TurnState::GameOver);
+                return;
+            }
+
             // one death per execution
             break;
+        } else {
+            println!("*click* \n{} survives. (chamber now {}/{})",
+                shot.target, revolver.chamber, revolver.bullet);
         }
     }
 
