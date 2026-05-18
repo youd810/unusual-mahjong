@@ -4,18 +4,19 @@ use crate::components::*;
 use crate::messages::*;
 use crate::resources::*;
 use crate::core::*;
-use crate::scoring;
+use crate::scoring::*;
+use crate::states::*;
 
 pub fn human_discard_ui_system(
     mut contexts: EguiContexts,
     current_turn: Res<CurrentTurn>,
-    query: Query<(Entity, &Hand, Option<&DrawnTile>, Option<&RiichiOption>, Has<RiichiSelecting>), With<HumanPlayer>>,
+    query: Query<(Entity, &Hand, Option<&DrawnTile>, Option<&RiichiOption>, Has<RiichiSelecting>, Option<&ForbiddenDiscard>), With<HumanPlayer>>,
     mut discard_writer: MessageWriter<DiscardTileMessage>,
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
     mut commands: Commands,
 ) {
     // TODO: show human hand at all times
-    let Ok((player, hand, maybe_drawn, maybe_riichi, is_selecting)) = query.get(current_turn.0) else {
+    let Ok((player, hand, maybe_drawn, maybe_riichi, is_selecting, maybe_forbidden)) = query.get(current_turn.0) else {
         return;
     };
     let Ok(ctx) = contexts.ctx_mut() else { return };
@@ -35,7 +36,8 @@ pub fn human_discard_ui_system(
                 for (i, tile) in hand.0.iter().enumerate() {
                     ui.push_id(i, |ui| { // each button has a unique ID
                         let tile_name = format!("{:?}", tile);
-                        let enabled = !is_selecting || valid_discards.is_some_and(|v| v.contains(tile));
+                        let enabled = (!is_selecting || valid_discards.is_some_and(|v| v.contains(tile))) 
+                            && !maybe_forbidden.is_some_and(|f| f.0.contains(tile));
 
                         if ui.add_enabled(enabled, egui::Button::new(tile_name)).clicked() {
                             if is_selecting {
@@ -52,7 +54,8 @@ pub fn human_discard_ui_system(
                 if let Some(drawn) = maybe_drawn {
                     ui.separator();
                     let drawn_name = format!("{:?}", drawn.0);
-                    let enabled = !is_selecting || valid_discards.map_or(false, |v| v.contains(&drawn.0));
+                    let enabled = (!is_selecting || valid_discards.is_some_and(|v| v.contains(&drawn.0))) 
+                        && !maybe_forbidden.is_some_and(|f| f.0.contains(&drawn.0));
 
                     if ui.add_enabled(enabled, egui::Button::new(drawn_name)).clicked() {
                         if is_selecting {
@@ -371,5 +374,79 @@ pub fn round_end_ui_system(
             if ui.button("Continue").clicked() {
                 commands.remove_resource::<RoundSummary>();
             }
+        });
+}
+
+pub fn target_selection_ui_system(
+    mut contexts: EguiContexts,
+    query: Query<(Entity, &Jikaze, &Points), With<Alive>>,
+    mut pending: ResMut<PendingTargetSelection>,
+    mut queue: ResMut<ExecuteQueue>,
+    mut next_step: ResMut<NextState<ExecutionSubState>>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    egui::Window::new("Execute")
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label(format!("{} shots remaining", pending.remaining_picks));
+            for (player, jikaze, points) in query.iter() {
+                if player != pending.shooter 
+                && ui.button(format!("{} ({:?} seat, {} points)", player, jikaze.0, points.0)).clicked() {
+                        queue.0.push(Execute {
+                            shooter: pending.shooter,
+                            target: player,
+                        });
+                        pending.remaining_picks -= 1;
+                        if pending.remaining_picks == 0 {
+                            next_step.set(ExecutionSubState::Processing);
+                    }
+                }
+            }
+        });
+}
+
+// !for testing 
+pub fn debug_ui_system(
+    mut contexts: EguiContexts,
+    mut query: Query<(Entity, &mut Hand, Option<&mut DrawnTile>), With<HumanPlayer>>,
+    mut commands: Commands,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    egui::Window::new("Debug Tools")
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(10.0, -10.0))
+        .show(ctx, |ui| {
+            if ui.button("Force Daisangen").clicked() 
+            && let Ok((player, mut hand, mut drawn)) = query.single_mut() {
+                hand.0 = vec![
+                    Tile::Honor(Honor::White), Tile::Honor(Honor::White), Tile::Honor(Honor::White),
+                    Tile::Honor(Honor::Green), Tile::Honor(Honor::Green), Tile::Honor(Honor::Green),
+                    Tile::Honor(Honor::Red), Tile::Honor(Honor::Red), Tile::Honor(Honor::Red),
+                    Tile::Honor(Honor::East), Tile::Honor(Honor::East), Tile::Honor(Honor::East),
+                    Tile::Honor(Honor::South),
+                ];
+
+                if let Some(mut d) = drawn {
+                    d.0 = Tile::Honor(Honor::South);
+                }
+
+                commands.entity(player).insert(Tenpai(vec![Tile::Honor(Honor::South)]));
+
+                commands.entity(player).insert(TsumoOption {
+                    result: HandResult {
+                        yaku_names: vec!["Tenhou".to_owned(), "Daisangen".to_owned(), "Tsuuisou".to_owned(), "Suuankou".to_owned()],
+                        dora_count: 0,
+                        ura_dora_count: 0,
+                        total_han: 0,
+                        total_fu: 0,
+                        is_yakuman: true,
+                    }
+                });
+
+                println!("Debug: Hand swapped to Daisangen.");
+            }
+            
+            // TODO: add more
         });
 }

@@ -72,27 +72,7 @@ pub fn build_shot_queue(
 }
 
 
-pub fn select_targets(
-    mut pending: ResMut<PendingTargetSelection>,
-    mut queue: ResMut<ExecuteQueue>,
-    mut next_step: ResMut<NextState<ExecutionSubState>>,
-    // !+ ui input later
-) {
-    // TODO: show clickable opponents
-    let clicked: Option<Entity> = None; // placeholder
 
-    if let Some(target) = clicked {
-        queue.0.push(Execute {
-            shooter: pending.shooter,
-            target,
-        });
-        pending.remaining_picks -= 1;
-
-        if pending.remaining_picks == 0 {
-            next_step.set(ExecutionSubState::Processing);
-        }
-    }
-}
 
 
 pub fn process_shot_queue(

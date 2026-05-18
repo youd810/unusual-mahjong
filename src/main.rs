@@ -76,6 +76,7 @@ fn main() {
         .add_systems(EguiPrimaryContextPass, (
             main_phase_ui_system,
             human_discard_ui_system,
+            debug_ui_system,
         ).run_if(in_state(TurnState::MainPhase))
         .run_if(not(resource_exists::<RoundResult>)))
         .add_systems(OnExit(TurnState::MainPhase),cleanup_main_phase_options)
@@ -125,8 +126,9 @@ fn main() {
         // shooting phase
         .add_sub_state::<ExecutionSubState>()
         .add_systems(OnEnter(ExecutionSubState::BuildQueue), build_shot_queue)
-        .add_systems(Update, select_targets.run_if(in_state(ExecutionSubState::SelectTargets)))
         .add_systems(OnEnter(ExecutionSubState::Processing), process_shot_queue)
+        // shooting ui
+        .add_systems(EguiPrimaryContextPass, target_selection_ui_system.run_if(in_state(ExecutionSubState::SelectTargets)))
         .run();
     
 }
