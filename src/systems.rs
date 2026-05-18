@@ -24,7 +24,7 @@ pub fn build_shot_queue(
     let oya = oya_query.single().unwrap();
 
     // win-based shots
-    for (winner, result) in &outcome.winners {
+    for (winner, result, _) in &outcome.winners {
         let shots = result.shot_count_from_result();
 
         if shots > 0 {
@@ -44,7 +44,7 @@ pub fn build_shot_queue(
 
 
     // low han self-shot
-    for (winner, result) in &outcome.winners {
+    for (winner, result, _) in &outcome.winners {
         if result.is_low_han() {
             queue.push(Execute { shooter: oya, target: *winner });
         }
@@ -183,9 +183,6 @@ pub fn check_ryuukyoku(
 }
 
 
-
-
-// TODO: multiple ron
 // runs once upon entering CallWindow 
 pub fn ron_check(
     query: Query<(
@@ -309,7 +306,7 @@ pub fn declare_ron(
             loser_pts.0 -= final_payout;
         }
 
-        ron_winners.push((*winner, ron_option.result.to_owned()));
+        ron_winners.push((*winner, ron_option.result.to_owned(), score.total_won));
 
         println!("{} declares Ron on {}! {:?} - {}han {}fu - {} points",
             winner, ron_option.discarded_by, ron_option.result.yaku_names,
@@ -333,8 +330,8 @@ pub fn declare_ron(
 
     if let Some((closest, _, _)) = winners.first()
     && let Ok(mut pts) = points_query.get_mut(*closest) {
-            pts.0 += game.riichi_points as i32;
-            game.riichi_points = 0;
+        pts.0 += game.riichi_points as i32;
+        game.riichi_points = 0;
     }
 
  
@@ -465,7 +462,7 @@ pub fn declare_tsumo(
         );
 
         commands.insert_resource(RoundOutcome{
-            winners: vec![(message.player, message.result.to_owned())],  
+            winners: vec![(message.player, message.result.to_owned(), score.total_won)],  
             loser: None,       
             is_tsumo: true,
             tochuu_causer: vec![],
@@ -1429,7 +1426,38 @@ pub fn start_round(
     next_state.set(TurnState::Draw);
 }
 
-// TODO: Parameter `ResMut<'_, ExecuteQueue>` failed validation: Resource does not exist
+
+pub fn build_round_summary(
+    result: Res<RoundResult>,
+    outcome: Option<Res<RoundOutcome>>,
+    mut commands: Commands,
+) {
+    let reason_text = match &result.0 {
+        RoundEndReason::OyaWin => "Oya Win (Renchan)".to_owned(),
+        RoundEndReason::NonOyaWin => "Non-Oya Win".to_owned(),
+        RoundEndReason::RyuukyokuOyaTenpai => "Ryuukyoku (Oya Tenpai)".to_owned(),
+        RoundEndReason::RyuukyokuOyaNoten => "Ryuukyoku (Oya Noten)".to_owned(),
+        RoundEndReason::TochuuRyuukyoku => "Tochuu Ryuukyoku".to_owned(),
+    };
+
+    if let Some(outcome) = outcome {
+        commands.insert_resource(RoundSummary {
+            reason_text,
+            winners: outcome.winners.clone(),
+            loser: outcome.loser,
+            is_tsumo: outcome.is_tsumo,
+        });
+    } else {
+        commands.insert_resource(RoundSummary {
+            reason_text,
+            winners: vec![],
+            loser: None,
+            is_tsumo: false,
+        });
+    }
+}
+
+
 pub fn round_cleanup(
     mut query: Query<(Entity, &mut Jikaze, Has<Oya>)>,
     alive_query: Query<&Alive>,

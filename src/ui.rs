@@ -105,17 +105,38 @@ pub fn call_window_ui_system(
                     if let Some(p) = pon && ui.button(format!("Pon {:?}", p.0)).clicked() {
                         pon_writer.write(DeclarePonMessage { player, tile: p.0 });  
                     }
-                    // TODO: just auto-picking the first valid chi position for now. more choice(s) later
-                    if let Some(c) = chi 
-                        && ui.button(format!("Chi {:?}", c.tile)).clicked() 
-                        && let Ok(discarded_by) = discard_query.single() {
-                            chi_writer.write(DeclareChiMessage {
-                                player,
-                                tile: c.tile,
-                                pos: c.positions[0],
-                                discarded_by: discarded_by.0,
-                            });
+                    
+                    if let Some(c) = chi && let Ok(discarded_by) = discard_query.single() {
+                        for pos in &c.positions {
+                            let label = match pos {
+                                ChiTilePos::Left => {
+                                    let n = next_tile_sequence(&c.tile).unwrap();
+                                    let nn = next_tile_sequence(&n).unwrap();
+                                    format!("Chi [{:?} {:?} {:?}]", c.tile, n, nn)
+                                }
+                                ChiTilePos::Middle => {
+                                    let p = previous_tile_sequence(&c.tile).unwrap();
+                                    let n = next_tile_sequence(&c.tile).unwrap();
+                                    format!("Chi [{:?} {:?} {:?}]", p, c.tile, n)
+                                }
+                                ChiTilePos::Right => {
+                                    let p = previous_tile_sequence(&c.tile).unwrap();
+                                    let pp = previous_tile_sequence(&p).unwrap();
+                                    format!("Chi [{:?} {:?} {:?}]", pp, p, c.tile)
+                                }
+                            };
+
+                            if ui.button(&label).clicked() {
+                                chi_writer.write(DeclareChiMessage {
+                                    player,
+                                    tile: c.tile,
+                                    pos: *pos,
+                                    discarded_by: discarded_by.0,
+                                });
+                            }
+                        }
                     }
+
                     if let Some(k) = kan && ui.button(format!("Kan {:?}", k.0)).clicked() {
                         kan_writer.write(DeclareKanMessage { player, tile: k.0, is_discard: true });
                     }
@@ -291,6 +312,64 @@ pub fn info_display_ui_system(
                             }
                         }
                     });
+            }
+        });
+}
+
+
+pub fn round_end_ui_system(
+    mut contexts: EguiContexts,
+    summary: Option<Res<RoundSummary>>,
+    jikaze_query: Query<&Jikaze>,
+    mut commands: Commands,
+) {
+    let Some(summary) = summary else { return };
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    egui::Window::new("Round Result")
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.heading(&summary.reason_text);
+            ui.separator();
+
+            if summary.winners.is_empty() {
+                ui.label("No winners.");
+            }
+
+            for (entity, result, hand_score) in &summary.winners {
+                let wind = jikaze_query.get(*entity)
+                    .map(|j| format!("{:?}", j.0))
+                    .unwrap_or("?".to_string());
+
+                ui.label(format!("Winner: {} ({}) — {}",
+                    entity, wind,
+                    if summary.is_tsumo { "Tsumo" } else { "Ron" }));
+
+                if result.is_yakuman {
+                    ui.label("YAKUMAN!!!");
+                }
+
+                for yaku in &result.yaku_names {
+                    ui.label(format!("  • {}", yaku));
+                }
+
+                if result.dora_count > 0 {
+                    ui.label(format!("Dora {}", result.dora_count));
+                }
+
+                if result.ura_dora_count > 0 {
+                    ui.label(format!("Ura Dora {}", result.ura_dora_count));
+                }
+
+                ui.label(format!("  {}han {}fu", result.total_han, result.total_fu));
+                ui.label(format!("{}", hand_score));
+                ui.separator();
+            }
+
+            if ui.button("Continue").clicked() {
+                commands.remove_resource::<RoundSummary>();
             }
         });
 }

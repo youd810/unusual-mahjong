@@ -371,15 +371,6 @@ pub fn is_furiten(kawa: &Kawa, tenpai: &Tenpai) -> bool {
 }
 
 
-// ! pub fn can_declare_riichi(hand: &[Tile], is_closed: bool, is_riichi: bool, points: i32, wall: &Wall) -> bool {
-// !     !is_riichi
-// !         && is_closed
-// !         && points >= 1000
-// !         && wall.0.len() >= 4
-// !         && !check_tenpai(hand).is_empty()
-// ! }
-
-
 // call on opponent discard
 // こんな引数を見せられたら誰でも泣きたくなるんだよなぁ
 pub fn can_declare_ron(

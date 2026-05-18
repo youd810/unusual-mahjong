@@ -20,7 +20,6 @@ pub struct GameState {
 pub struct CurrentTurn(pub Entity); // id of the current tsumo
 
 
-
 #[derive(Resource)]
 pub struct Wall(pub Vec<Tile>);
 
@@ -47,12 +46,19 @@ pub struct RoundResult(pub RoundEndReason);
 // TODO: add tochuu causer to tochuu systems
 #[derive(Resource)]
 pub struct RoundOutcome {
-    pub winners: Vec<(Entity, HandResult)>,  // can be multiple for double ron
+    pub winners: Vec<(Entity, HandResult, u32)>,  // can be multiple for double ron
     pub loser: Option<Entity>,               // None for tsumo
     pub is_tsumo: bool,
     pub tochuu_causer: Vec<Entity>,
 }
 
+#[derive(Resource)]
+pub struct RoundSummary {
+    pub reason_text: String,
+    pub winners: Vec<(Entity, HandResult, u32)>,
+    pub loser: Option<Entity>,
+    pub is_tsumo: bool,
+}
 
 pub struct Execute {
     pub shooter: Entity,

@@ -108,14 +108,20 @@ fn main() {
         .add_systems(OnExit(TurnState::CallWindow), cleanup_call_options)
         // rinshan draw
         .add_systems(OnEnter(TurnState::RinshanDraw), rinshan_draw)
-        // advance & end
+        // advance turn
         .add_systems(OnEnter(TurnState::AdvanceTurn), (check_ryuukyoku, next_turn).chain())
+        // round end
         .add_systems(OnEnter(TurnState::RoundEnd), (
             tenpai_payout_system
                 .run_if(|result: Res<RoundResult>| matches!(result.0,
                     RoundEndReason::RyuukyokuOyaTenpai | RoundEndReason::RyuukyokuOyaNoten)),
-            round_cleanup,
+            build_round_summary,
         ).chain())
+        .add_systems(EguiPrimaryContextPass, round_end_ui_system
+            .run_if(in_state(TurnState::RoundEnd)))
+        .add_systems(Update, round_cleanup
+            .run_if(in_state(TurnState::RoundEnd))
+            .run_if(not(resource_exists::<RoundSummary>)))
         // shooting phase
         .add_sub_state::<ExecutionSubState>()
         .add_systems(OnEnter(ExecutionSubState::BuildQueue), build_shot_queue)

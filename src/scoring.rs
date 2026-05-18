@@ -6,6 +6,8 @@ use crate::components::*;
 #[derive(Debug, Clone)]
 pub struct HandResult {
     pub yaku_names: Vec<String>,
+    pub dora_count: u8,
+    pub ura_dora_count: u8,
     pub total_han: u8,
     pub total_fu: u8,
     pub is_yakuman: bool,
@@ -27,6 +29,11 @@ impl HandResult {
     }
 }
 
+pub struct DoraCount {
+    pub dora: u8,
+    pub ura_dora: u8,
+    pub additional_han: u8,
+}
 
 #[derive(Debug)]
 pub struct ScorePayout {
@@ -50,23 +57,29 @@ pub fn get_dora_from_indicator(indicator: &Tile) -> Tile {
     }
 }
 
-pub fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool) -> u8 {
-    let mut additional_han = 0;
+pub fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool) -> DoraCount {
+    let mut dora_count = DoraCount {
+        dora: 0,
+        ura_dora: 0,
+        additional_han: 0,
+    };
     for tile in combined_hand.iter() {
         for dora in dead_wall.dora_indicators.iter() {
             if *tile == get_dora_from_indicator(dora) {
-                additional_han += 1 
+                dora_count.dora += 1;
+                dora_count.additional_han += 2;
             }
         }
         if is_riichi {
             for ura in dead_wall.ura_indicators.iter() {
                 if *tile == get_dora_from_indicator(ura) {
-                    additional_han += 2 // ! testing 
+                    dora_count.ura_dora += 1;
+                    dora_count.additional_han += 2 // ! testing 
                 }
             }
         }
     }
-    additional_han
+    dora_count
 }
 
 
@@ -163,7 +176,7 @@ pub fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman
 
     // https://riichi.wiki/Japanese_mahjong_scoring_rules
     // vanilla: base = fu as u32 * 2_u32.pow((han + 2 ).into());
-    let float_base = fu as f32 * 2_f32.powf((han as f32 / 3.0) + 2.0);
+    let float_base = fu as f32 * 2_f32.powf((han as f32 / 3.0) + 2.0); // ! consider double han for yaku and half for custom dora later
     let mut base = float_base.round() as u32;
 
     // ! testing
@@ -234,6 +247,8 @@ pub fn evaluate_yaku(
 ) -> HandResult {
     let mut best = HandResult {
         yaku_names: vec![],
+        dora_count: 0,
+        ura_dora_count: 0,
         total_han: 0,
         total_fu: 0,
         is_yakuman: false,
@@ -243,7 +258,11 @@ pub fn evaluate_yaku(
     if is_hand_closed && kokushi_musou(raw_hand) {
         let mut eval = HandResult {
             yaku_names: vec!["Kokushi Musou".to_string()],
-            total_han: 0, total_fu: 0, is_yakuman: true,
+            dora_count: 0,
+            ura_dora_count: 0,
+            total_han: 0, 
+            total_fu: 0, 
+            is_yakuman: true,
         };
         add_situational_yakuman(&mut eval, kawa, is_oya, is_tsumo, calls_made);
         return eval;
@@ -275,8 +294,11 @@ pub fn evaluate_yaku(
 
     if !best.yaku_names.is_empty() && !best.is_yakuman {
         // ! testing
+        let dora_count = count_dora(combined_hand, dead_wall, is_riichi);
+        best.dora_count = dora_count.dora;
+        best.ura_dora_count = dora_count.ura_dora;
         best.total_han *= 3;
-        best.total_han += count_dora(combined_hand, dead_wall, is_riichi)
+        best.total_han += dora_count.additional_han;
     }
 
     best
@@ -305,7 +327,11 @@ pub fn evaluate_standard(
 ) -> HandResult {
     let mut eval = HandResult {
         yaku_names: vec![],
-        total_han: 0, total_fu: 0, is_yakuman: false,
+        dora_count: 0,
+        ura_dora_count: 0,
+        total_han: 0, 
+        total_fu: 0, 
+        is_yakuman: false,
     };
 
 
@@ -472,6 +498,8 @@ pub fn evaluate_chiitoitsu(
 ) -> HandResult {
     let mut eval = HandResult {
         yaku_names: vec!["Chiitoitsu".to_string()],
+        dora_count: 0,
+        ura_dora_count: 0,
         total_han: 2,
         total_fu: 25, // always fixed
         is_yakuman: false,
