@@ -179,6 +179,175 @@ pub fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<V
     
 }
 
+
+pub fn tile_to_index(tile: &Tile) -> usize {
+    match tile {
+        Tile::Man(n) => (n - 1) as usize,
+        Tile::Pin(n) => (n - 1) as usize + 9,
+        Tile::Sou(n) => (n - 1) as usize + 18,
+        Tile::Honor(h) => 27 + match h {
+            Honor::East => 0,
+            Honor::South => 1,
+            Honor::West => 2,
+            Honor::North => 3,
+            Honor::White => 4,
+            Honor::Green => 5,
+            Honor::Red => 6,
+        },
+    }
+}
+
+
+pub fn hand_to_frequency_array(hand: &[Tile]) -> [u8; 34] {
+    let mut freq_array= [0; 34]; 
+    for tile in hand.iter() {
+        freq_array[tile_to_index(tile)] += 1
+    }
+    freq_array
+}
+
+pub fn count_blocks(pos: usize, mentsu: u8, partials: u8, freq_array: &mut [u8; 34], has_pair: u8) -> i32 {
+    if pos == 34 {
+        let valid_partials = partials.min(4 - mentsu);
+        return 8 - (2 * mentsu as i32) - (valid_partials as i32) - (has_pair as i32);
+    }
+    let mut min_shanten = count_blocks(pos + 1, mentsu, partials, freq_array, has_pair);
+    
+    // koutsu
+    if freq_array[pos] >= 3 {
+        freq_array[pos] -= 3;
+        let koutsu_shanten = count_blocks(pos, mentsu + 1, partials, freq_array, has_pair);
+        min_shanten = min_shanten.min(koutsu_shanten);
+        freq_array[pos] += 3;
+    }
+
+    // shuntsu 
+    if pos < 27 && pos % 9 <= 6 && freq_array[pos] >= 1 && freq_array[pos+1] >= 1 && freq_array[pos+2] >= 1 {
+        for i in 0..3 {
+            freq_array[pos + i] -= 1;
+        }
+        let shuntsu_shanten = count_blocks(pos, mentsu + 1, partials, freq_array, has_pair);
+        min_shanten = min_shanten.min(shuntsu_shanten);
+        for i in 0..3 {
+            freq_array[pos + i] += 1;
+        }
+    } 
+
+    // toitsu
+    if freq_array[pos] >= 2 {
+        freq_array[pos] -= 2;
+        let toitsu_shanten = count_blocks(pos, mentsu, partials + 1, freq_array, has_pair);
+        min_shanten = min_shanten.min(toitsu_shanten);
+        freq_array[pos] += 2;
+    }
+    // ryanmen/penchan
+    if pos < 27 && pos % 9 <= 7 && freq_array[pos] >= 1 && freq_array[pos+1] >= 1 {
+        for i in 0..2 {
+            freq_array[pos + i] -= 1;
+        }
+        let taatsu_shanten = count_blocks(pos, mentsu, partials + 1, freq_array, has_pair);
+        min_shanten = min_shanten.min(taatsu_shanten);
+        for i in 0..2 {
+            freq_array[pos + i] += 1;
+        }
+    }
+    // kanchan
+    if pos < 27 && pos % 9 <= 6 && freq_array[pos] >= 1 && freq_array[pos+2] >= 1 {
+        freq_array[pos] -= 1;
+        freq_array[pos+2] -= 1;
+        let taatsu_shanten = count_blocks(pos, mentsu, partials + 1, freq_array, has_pair);
+        min_shanten = min_shanten.min(taatsu_shanten);
+        freq_array[pos] += 1;
+        freq_array[pos+2] += 1;
+    }
+
+    min_shanten
+
+}
+
+
+pub fn calculate_standard_shanten(mut freq_array: &mut [u8; 34]) -> i32 {
+    let mut best_shanten = 8;
+    best_shanten = best_shanten.min(count_blocks(0, 0, 0, &mut freq_array, false as u8));
+
+    for i in 0..34 {
+        if freq_array[i] >= 2 {
+            freq_array[i] -= 2;
+            best_shanten = best_shanten.min(count_blocks(0, 0, 0, &mut freq_array, true as u8));
+            freq_array[i] += 2;
+        }
+    }
+    best_shanten
+}
+
+
+fn calculate_chiitoitsu_shanten(freq_array: &mut [u8; 34]) -> i32 {
+    let mut pairs = 0;
+
+    for tile in freq_array {
+        if *tile >= 2 {
+            pairs += 1
+        }
+    }
+    6 - pairs
+}
+
+fn calculate_kokushi_shanten(freq_array: &mut [u8; 34]) -> i32 {
+    let mut yaochuuhai_count = 0;
+    let mut has_pair = false;
+    const YAOCHUUHAI_POS: [usize; 13] = [
+        0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33
+    ];
+
+    for &i in YAOCHUUHAI_POS.iter() {
+        if freq_array[i] >= 1 {
+            yaochuuhai_count += 1;
+        }
+        if freq_array[i] >= 2 {
+            has_pair = true;
+        }
+    }
+
+    13 - yaochuuhai_count - has_pair as i32
+}
+
+
+pub fn calculate_shanten(hand: &[Tile]) -> i32 {
+    let mut freq_array = hand_to_frequency_array(hand);
+    calculate_shanten_from_array(&mut freq_array)
+}
+
+
+pub fn calculate_shanten_from_array(freq_array: &mut [u8; 34]) -> i32 {
+    let mut shanten = 8;
+    shanten = shanten.min(calculate_standard_shanten(freq_array));
+    shanten = shanten.min(calculate_chiitoitsu_shanten(freq_array));
+    shanten = shanten.min(calculate_kokushi_shanten(freq_array));
+    shanten
+}
+
+
+pub fn ukeire_tiles(thirteen_tiles: &[Tile], current_shanten: i32) -> Vec<usize> {
+    let mut freq_array = hand_to_frequency_array(thirteen_tiles);
+    let mut ukeire = vec![];
+
+    for i in 0..34 {
+        if freq_array[i] == 4 { continue; }
+
+        freq_array[i] += 1;
+
+        let shanten = calculate_shanten_from_array(&mut freq_array);
+
+        if shanten < current_shanten {
+            ukeire.push(i);
+        }
+
+        freq_array[i] -= 1;
+    }
+
+    ukeire
+}
+
 pub fn combine_tiles(hand: &Hand, open_mentsu: &OpenMentsu) -> Vec<Tile> {
     let mut result = hand.0.clone();
 
