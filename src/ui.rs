@@ -187,7 +187,7 @@ pub fn main_phase_ui_system(
                         tsumo_writer.write(DeclareTsumoMessage { player, result: t.result.to_owned() });
                     }
                     if riichi.is_some() && ui.button("Riichi").clicked() {
-                         commands.entity(player).insert(RiichiSelecting);
+                        commands.entity(player).insert(RiichiSelecting);
                     }
                     if let Some(a) = ankan {
                         for tile in &a.0 {

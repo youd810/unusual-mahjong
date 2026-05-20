@@ -1319,21 +1319,7 @@ pub fn next_turn(
 }
 
 
-// for testing
-pub fn auto_discard_bot(
-    current_turn: Res<CurrentTurn>,
-    query: Query<&DrawnTile, Without<HumanPlayer>>,
-    mut messages: MessageWriter<DiscardTileMessage>,
-) {
-    if let Ok(drawn) = query.get(current_turn.0) {
 
-        messages.write(DiscardTileMessage {
-            player: current_turn.0,
-            tile: drawn.0,
-            is_tsumogiri: true,
-        });
-    }
-}
 
 pub fn auto_advance_call_window(
     human_options: Query<(), (

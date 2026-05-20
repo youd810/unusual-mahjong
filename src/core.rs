@@ -33,6 +33,15 @@ pub enum Mentsu {
     Shouminkan(Vec<Tile>),
 }
 
+impl Mentsu {
+    pub fn tiles(&self) -> &[Tile] {
+        match self {
+            Mentsu::Jantou(t) | Mentsu::Ankan(t) | Mentsu::Daiminkan(t) | Mentsu::Shouminkan(t) => t,
+            Mentsu::Koutsu(t, _) | Mentsu::Shuntsu(t, _) => t,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Kantsu {
     Ankan,
@@ -327,25 +336,64 @@ pub fn calculate_shanten_from_array(freq_array: &mut [u8; 34]) -> i32 {
 }
 
 
-pub fn ukeire_tiles(thirteen_tiles: &[Tile], current_shanten: i32) -> Vec<usize> {
-    let mut freq_array = hand_to_frequency_array(thirteen_tiles);
+pub fn ukeire_tiles(freq_array: &mut [u8; 34], current_shanten: i32) -> Vec<usize> {
     let mut ukeire = vec![];
+    for i in 0..34 {
+        if freq_array[i] >= 4 { continue; }
+        freq_array[i] += 1;
+        if calculate_shanten_from_array(freq_array) < current_shanten {
+            ukeire.push(i);
+        }
+        freq_array[i] -= 1;
+    }
+    ukeire
+}
+
+pub fn index_to_tile(index: usize) -> Tile {
+    match index {
+        0..=8 => Tile::Man((index + 1) as u8),
+        9..=17 => Tile::Pin((index - 8) as u8),
+        18..=26 => Tile::Sou((index - 17) as u8),
+        27 => Tile::Honor(Honor::East),
+        28 => Tile::Honor(Honor::South),
+        29 => Tile::Honor(Honor::West),
+        30 => Tile::Honor(Honor::North),
+        31 => Tile::Honor(Honor::White),
+        32 => Tile::Honor(Honor::Green),
+        33 => Tile::Honor(Honor::Red),
+        _ => panic!("invalid tile index: {}", index),
+    }
+}
+
+pub fn evaluate_discard(combined_hand: &[Tile], visible_tiles: &[u8; 34]) -> Tile {
+    let mut freq_array = hand_to_frequency_array(combined_hand);
+    let mut best_index = 0;
+    let mut lowest_shanten = 8;
+    let mut max_ukeire_count = 0;
 
     for i in 0..34 {
-        if freq_array[i] == 4 { continue; }
-
-        freq_array[i] += 1;
+        if freq_array[i] == 0 { continue; }
+        freq_array[i] -= 1;
 
         let shanten = calculate_shanten_from_array(&mut freq_array);
 
-        if shanten < current_shanten {
-            ukeire.push(i);
-        }
+        if shanten <= lowest_shanten {
+            let ukeire = ukeire_tiles(&mut freq_array, shanten);
+            let ukeire_count: u8 = ukeire.iter()
+                .map(|&j| 4 - freq_array[j] - visible_tiles[j])
+                .sum();
 
-        freq_array[i] -= 1;
+            if shanten < lowest_shanten
+                || (shanten == lowest_shanten && ukeire_count > max_ukeire_count) {
+                best_index = i;
+                lowest_shanten = shanten;
+                max_ukeire_count = ukeire_count;
+            }
+        };
+
+        freq_array[i] += 1;
     }
-
-    ukeire
+    index_to_tile(best_index)
 }
 
 pub fn combine_tiles(hand: &Hand, open_mentsu: &OpenMentsu) -> Vec<Tile> {

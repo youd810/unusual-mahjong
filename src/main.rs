@@ -3,14 +3,13 @@
 // ! ai behavior (priority: call/naki resolving logic)
 
 
-// TODO: return options for some of these (no)
-
 mod components;
 mod resources;
 mod core;
 mod scoring;
 mod messages;
-mod systems;
+mod board_systems;
+mod bot_systems;
 mod states;
 mod yaku;
 mod ui;
@@ -20,7 +19,8 @@ use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 
 use resources::*;
 use messages::*;
-use systems::*;
+use board_systems::*;
+use bot_systems::*;
 use states::*;
 use ui::*;
 
@@ -68,7 +68,7 @@ fn main() {
             declare_riichi,
             declare_kyuushu,
             declare_kan,
-            auto_discard_bot,
+            bot_discard_system,
             discard_tile,
         ).run_if(in_state(TurnState::MainPhase))
         .run_if(not(resource_exists::<RoundResult>)))
