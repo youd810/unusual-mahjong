@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 use crate::core::*;
+use crate::components::*;
+use crate::states::*;
 use crate::scoring::*;
 use rand::RngExt;
 
@@ -104,3 +106,20 @@ impl Revolver {
         fired
     }
 }
+
+#[derive(Resource)]
+pub struct KawaSnapshot {
+    pub all_kawa: Vec<(Entity, Vec<Tile>)>
+}
+
+#[derive(Resource)]
+pub struct PreBlackoutState(pub TurnState);
+
+#[derive(Resource)]
+pub struct BlackoutCheckTimer(pub Timer);
+
+#[derive(Resource)]
+pub struct BlackoutTimer(pub Timer);
+
+#[derive(Resource)]
+pub struct AccusationTimer(pub Timer);

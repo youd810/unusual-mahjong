@@ -207,9 +207,9 @@ pub fn tile_to_index(tile: &Tile) -> usize {
 }
 
 
-pub fn tiles_to_frequency_array(hand: &[Tile]) -> [u8; 34] {
+pub fn tiles_to_frequency_array(tiles: &[Tile]) -> [u8; 34] {
     let mut freq_array= [0; 34]; 
-    for tile in hand.iter() {
+    for tile in tiles.iter() {
         freq_array[tile_to_index(tile)] += 1
     }
     freq_array
@@ -416,6 +416,7 @@ pub fn evaluate_discard(
     }
     index_to_tile(best_index)
 }
+
 
 pub fn combine_tiles(hand: &[Tile], open_mentsu: &Vec<Mentsu>) -> Vec<Tile> {
     let mut result = hand.to_owned();

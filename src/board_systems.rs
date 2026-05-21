@@ -7,7 +7,39 @@ use crate::messages::*;
 use crate::states::*;
 use crate::scoring::*;
 use bevy::prelude::*;
-use rand::seq::SliceRandom;
+use rand::{RngExt, seq::SliceRandom};
+
+
+pub fn blackout_check_system(
+    time: Res<Time>,
+    mut timer: ResMut<BlackoutCheckTimer>,
+    state: Res<State<TurnState>>,
+    query: Query<(Entity, &Kawa)>,
+    mut next_state: ResMut<NextState<TurnState>>,
+    mut commands: Commands,
+) {
+    timer.0.tick(time.delta());
+    if !timer.0.just_finished() {
+        return;
+    }
+
+    if rand::random::<f32>() > 0.008 {
+        return;
+    }
+
+    let all_kawa = query.iter()
+        .map(|(e, kawa)| (e, kawa.0.clone()))
+        .collect();
+
+    commands.insert_resource(KawaSnapshot { all_kawa });
+    commands.insert_resource(PreBlackoutState(state.get().clone()));
+    commands.insert_resource(BlackoutTimer(Timer::from_seconds(
+        rand::rng().random_range(1.0..=5.0),
+        TimerMode::Once,
+    )));
+
+    next_state.set(TurnState::Blackout);
+}
 
 
 pub fn build_shot_queue(
@@ -70,9 +102,6 @@ pub fn build_shot_queue(
         next_step.set(ExecutionSubState::Processing);
     }
 }
-
-
-
 
 
 pub fn process_shot_queue(

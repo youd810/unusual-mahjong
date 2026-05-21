@@ -33,6 +33,7 @@ fn main() {
         .init_resource::<CallLock>()
         .init_state::<TurnState>()
         .add_systems(EguiPrimaryContextPass, (info_display_ui_system).run_if(resource_exists::<Wall>))
+        .insert_resource(BlackoutCheckTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
         // messages
         .add_message::<DiscardTileMessage>()
         .add_message::<DeclarePonMessage>()
@@ -93,6 +94,7 @@ fn main() {
             |mut lock: ResMut<CallLock>| lock.0 = false, // lock reset
         ).chain())
         .add_systems(Update, (
+            bot_call_system,
             declare_ron,
             declare_kan,
             declare_pon,
@@ -109,6 +111,15 @@ fn main() {
         .add_systems(OnExit(TurnState::CallWindow), cleanup_call_options)
         // rinshan draw
         .add_systems(OnEnter(TurnState::RinshanDraw), rinshan_draw)
+        // blackout
+        .add_systems(Update, blackout_check_system
+            .run_if(in_state(TurnState::Draw)
+                .or(in_state(TurnState::MainPhase))
+                .or(in_state(TurnState::CallWindow))
+                .or(in_state(TurnState::AdvanceTurn))
+                .or(in_state(TurnState::RinshanDraw))
+            )
+        )
         // advance turn
         .add_systems(OnEnter(TurnState::AdvanceTurn), (check_ryuukyoku, next_turn).chain())
         // round end

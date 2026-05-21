@@ -42,7 +42,6 @@ pub fn bot_discard_system(
             visible_tiles[tile_to_index(tile)] += 1;
         }
 
-        // ! WIP
         let discard = evaluate_discard(&hand_plus_drawn, &open_mentsu.0, &visible_tiles, &safe_tiles);
 
         if is_selecting {
@@ -71,6 +70,10 @@ pub fn bot_call_system(
         Option<&DaiminkanOption>,
     ),
     Without<HumanPlayer>>,
+    human_options: Query<(), (
+        With<HumanPlayer>,
+        Or<(With<RonOption>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>
+    )>,
     mut pon_writer: MessageWriter<DeclarePonMessage>,
     mut chi_writer: MessageWriter<DeclareChiMessage>,
     mut kan_writer: MessageWriter<DeclareKanMessage>,
@@ -78,12 +81,18 @@ pub fn bot_call_system(
     discarded_by: Single<&DiscardedBy, With<CurrentDiscard>>,
     mut commands: Commands,
 ) {
+    let human_is_deciding = !human_options.is_empty();
+
     for (player, hand, open_mentsu, ron, pon, chi, kan) in query {
 
         if ron.is_none() && pon.is_none() && chi.is_none() && kan.is_none() {
             continue;
         } else if ron.is_some() {
             commands.entity(player).insert(RonDeclared);
+            continue;
+        }
+
+        if human_is_deciding {
             continue;
         }
 

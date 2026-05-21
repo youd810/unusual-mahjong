@@ -11,6 +11,8 @@ pub enum TurnState {
     CallWindow,     
     AdvanceTurn,   
     RinshanDraw,
+    Blackout,         
+    AccusationWindow,
     RoundEnd,
     Execution,
     GameOver,
