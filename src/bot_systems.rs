@@ -9,7 +9,7 @@ use crate::messages::*;
 pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
     query: Query<(Entity, &DrawnTile, &Hand, &OpenMentsu, Has<RiichiSelecting>), Without<HumanPlayer>>,
-    visible_query: Query<(&OpenMentsu, &Kawa)>,
+    visible_query: Query<(&OpenMentsu, &Kawa, Has<Riichi>)>,
     dead_wall: Res<DeadWall>,
     mut messages: MessageWriter<DiscardTileMessage>,
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
@@ -18,12 +18,16 @@ pub fn bot_discard_system(
     if let Ok((player, drawn, hand, open_mentsu, is_selecting)) = query.get(current_turn.0) {
         println!("{} draws {:?}", current_turn.0, drawn.0);
 
-        let mut combined_hand = combine_tiles(hand, open_mentsu);
-        combined_hand.push(drawn.0);
+        let mut hand_plus_drawn = hand.0.clone();
+        hand_plus_drawn.push(drawn.0);
 
         let mut visible_tiles = [0; 34];
+        let mut safe_tiles = vec![];
 
-        for (open, kawa) in visible_query.iter() {
+        for (open, kawa, is_riichi) in visible_query.iter() {
+            if is_riichi { 
+                safe_tiles.push(kawa.0.to_owned());
+             }
             for mentsu in open.0.iter() {
                 for tile in mentsu.tiles() {
                     visible_tiles[tile_to_index(tile)] += 1;
@@ -39,7 +43,7 @@ pub fn bot_discard_system(
         }
 
         // ! WIP
-        let discard = evaluate_discard(&combined_hand, &visible_tiles);
+        let discard = evaluate_discard(&hand_plus_drawn, &open_mentsu.0, &visible_tiles, &safe_tiles);
 
         if is_selecting {
             riichi_writer.write(DeclareRiichiMessage { player, tile: discard });
@@ -83,7 +87,7 @@ pub fn bot_call_system(
             continue;
         }
 
-        let mut combined_hand = combine_tiles(hand, open_mentsu);
+        let mut combined_hand = combine_tiles(&hand.0, &open_mentsu.0);
         let pre_call_shanten = calculate_shanten(&combined_hand);
         
         combined_hand.push(discard_query.0);

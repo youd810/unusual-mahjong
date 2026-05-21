@@ -207,7 +207,7 @@ pub fn tile_to_index(tile: &Tile) -> usize {
 }
 
 
-pub fn hand_to_frequency_array(hand: &[Tile]) -> [u8; 34] {
+pub fn tiles_to_frequency_array(hand: &[Tile]) -> [u8; 34] {
     let mut freq_array= [0; 34]; 
     for tile in hand.iter() {
         freq_array[tile_to_index(tile)] += 1
@@ -322,7 +322,7 @@ fn calculate_kokushi_shanten(freq_array: &mut [u8; 34]) -> i32 {
 
 
 pub fn calculate_shanten(hand: &[Tile]) -> i32 {
-    let mut freq_array = hand_to_frequency_array(hand);
+    let mut freq_array = tiles_to_frequency_array(hand);
     calculate_shanten_from_array(&mut freq_array)
 }
 
@@ -365,14 +365,35 @@ pub fn index_to_tile(index: usize) -> Tile {
     }
 }
 
-pub fn evaluate_discard(combined_hand: &[Tile], visible_tiles: &[u8; 34]) -> Tile {
-    let mut freq_array = hand_to_frequency_array(combined_hand);
+pub fn evaluate_discard(
+    hand_plus_drawn: &[Tile], 
+    open_mentsu: &Vec<Mentsu>, 
+    visible_tiles: &[u8; 34], 
+    safe_tiles: &[Vec<Tile>], 
+) -> Tile {
+    let mut safe_map = [0; 34];
+    let mut has_safe_tiles = false;
+    for kawa in safe_tiles {
+        for tile in kawa {
+            safe_map[tile_to_index(tile)] += 1;
+            if hand_plus_drawn.contains(tile) {
+                has_safe_tiles = true;
+            }
+        }
+    }
+    
+    let combined_hand= combine_tiles(hand_plus_drawn, open_mentsu);
+    let mut freq_array = tiles_to_frequency_array(&combined_hand);
     let mut best_index = 0;
     let mut lowest_shanten = 8;
     let mut max_ukeire_count = 0;
+    let should_defend = calculate_shanten_from_array(&mut freq_array.to_owned()) > 1;
 
     for i in 0..34 {
-        if freq_array[i] == 0 { continue; }
+        if (freq_array[i] == 0 || !hand_plus_drawn.contains(&index_to_tile(i))) || (has_safe_tiles && safe_map[i] == 0  && should_defend) { 
+            continue; 
+        }
+
         freq_array[i] -= 1;
 
         let shanten = calculate_shanten_from_array(&mut freq_array);
@@ -380,10 +401,10 @@ pub fn evaluate_discard(combined_hand: &[Tile], visible_tiles: &[u8; 34]) -> Til
         if shanten <= lowest_shanten {
             let ukeire = ukeire_tiles(&mut freq_array, shanten);
             let ukeire_count: u8 = ukeire.iter()
-                .map(|&j| 4 - freq_array[j] - visible_tiles[j])
+                .map(|&j| 4u8.saturating_sub(freq_array[j]).saturating_sub(visible_tiles[j]))
                 .sum();
 
-            if shanten < lowest_shanten
+            if shanten < lowest_shanten 
                 || (shanten == lowest_shanten && ukeire_count > max_ukeire_count) {
                 best_index = i;
                 lowest_shanten = shanten;
@@ -396,10 +417,10 @@ pub fn evaluate_discard(combined_hand: &[Tile], visible_tiles: &[u8; 34]) -> Til
     index_to_tile(best_index)
 }
 
-pub fn combine_tiles(hand: &Hand, open_mentsu: &OpenMentsu) -> Vec<Tile> {
-    let mut result = hand.0.clone();
+pub fn combine_tiles(hand: &[Tile], open_mentsu: &Vec<Mentsu>) -> Vec<Tile> {
+    let mut result = hand.to_owned();
 
-    for mentsu in &open_mentsu.0{
+    for mentsu in open_mentsu{
         if let 
             Mentsu::Koutsu(tiles, _) 
                 | Mentsu::Shuntsu(tiles, _) 
@@ -665,7 +686,6 @@ pub fn can_declare_ron(
     } 
 
 }
-
 
 
 // call on self draw
