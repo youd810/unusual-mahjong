@@ -34,6 +34,8 @@ fn main() {
         .init_state::<TurnState>()
         .add_systems(EguiPrimaryContextPass, (info_display_ui_system).run_if(resource_exists::<Wall>))
         .insert_resource(BlackoutCheckTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
+        .init_resource::<BlackoutTileSelection>()
+        .init_resource::<CheatLog>()
         // messages
         .add_message::<DiscardTileMessage>()
         .add_message::<DeclarePonMessage>()
@@ -42,7 +44,7 @@ fn main() {
         .add_message::<DeclareRiichiMessage>()
         .add_message::<DeclareTsumoMessage>()
         .add_message::<DeclareKyuushuMessage>()
-        
+        .add_message::<AccuseCheatMessage>()
         // setup (first round)
         .add_systems(OnEnter(TurnState::Setup), (
             start_game,
@@ -120,6 +122,22 @@ fn main() {
                 .or(in_state(TurnState::RinshanDraw))
             )
         )
+        .add_systems(Update, blackout_timer_system
+            .run_if(in_state(TurnState::Blackout)))
+        .add_systems(OnExit(TurnState::Blackout), cleanup_blackout) 
+        // blackout ui 
+        .add_systems(EguiPrimaryContextPass, blackout_ui_system
+            .run_if(in_state(TurnState::Blackout)))
+        // accusation window
+        .add_systems(Update, (
+            resolve_accusation,
+            accusation_window_system,
+        ).chain()
+        .run_if(in_state(TurnState::AccusationWindow)))
+        .add_systems(OnExit(TurnState::AccusationWindow), cleanup_accusation)
+        // accusation ui
+        .add_systems(EguiPrimaryContextPass, accusation_ui_system
+            .run_if(in_state(TurnState::AccusationWindow)))
         // advance turn
         .add_systems(OnEnter(TurnState::AdvanceTurn), (check_ryuukyoku, next_turn).chain())
         // round end

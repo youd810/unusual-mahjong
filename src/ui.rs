@@ -1,3 +1,5 @@
+// ! temporary ui for testing only
+
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use crate::components::*;
@@ -405,6 +407,141 @@ pub fn target_selection_ui_system(
             }
         });
 }
+
+
+pub fn blackout_ui_system(
+    mut contexts: EguiContexts,
+    mut query: Query<(Entity, &mut Hand, &Jikaze, Option<&mut DrawnTile>), With<HumanPlayer>>,
+    mut kawa_query: Query<(Entity, &mut Kawa, &Jikaze)>,
+    mut selection: ResMut<BlackoutTileSelection>,
+    mut cheat_log: ResMut<CheatLog>,
+    timer: Res<BlackoutTimer>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let Ok((player, mut hand, _, mut maybe_drawn)) = query.single_mut() else { return };
+
+    egui::Window::new("The room is pitch black!")
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label(format!("Time remaining: {:.1}s", timer.0.remaining_secs()));
+            ui.separator();
+
+            ui.label("Your hand (click to select):");
+            ui.horizontal_wrapped(|ui| {
+                for (i, tile) in hand.0.iter().enumerate() {
+                    let selected = matches!(&selection.selected, SelectedSource::Hand(idx, _) if *idx == i);
+                    if ui.selectable_label(selected, format!("{:?}", tile)).clicked() {
+                        selection.selected = SelectedSource::Hand(i, *tile);
+                    }
+                }
+
+                if let Some(drawn) = &maybe_drawn {
+                    ui.separator();
+                    let selected = matches!(&selection.selected, SelectedSource::Drawn(_));
+                    if ui.selectable_label(selected, format!("{:?}", drawn.0)).clicked() {
+                        selection.selected = SelectedSource::Drawn(drawn.0);
+                    }
+                }
+            });
+
+            ui.separator();
+
+            let selected_tile = match &selection.selected {
+                SelectedSource::Hand(_, tile) => Some(*tile),
+                SelectedSource::Drawn(tile) => Some(*tile),
+                SelectedSource::None => None,
+            };
+
+            if let Some(hand_tile) = selected_tile {
+                ui.label(format!("Selected: {:?} — now pick a kawa tile to swap with:", hand_tile));
+
+                for (kawa_entity, mut kawa, jikaze) in kawa_query.iter_mut() {
+                    if kawa_entity == player || kawa.0.is_empty() {
+                        continue;
+                    }
+
+                    ui.label(format!("{:?} seat kawa:", jikaze.0));
+                    ui.horizontal_wrapped(|ui| {
+                        let mut swap_target: Option<(usize, Tile)> = None;
+                        for (k, kawa_tile) in kawa.0.iter().enumerate() {
+                            if ui.button(format!("{:?}", kawa_tile)).clicked() && swap_target.is_none() {
+                                swap_target = Some((k, *kawa_tile));
+                            }
+                        }
+
+                        if let Some((k, taken)) = swap_target {
+                            kawa.0[k] = hand_tile;
+
+                            match &selection.selected {
+                                SelectedSource::Hand(idx, _) => {
+                                    hand.0[*idx] = taken;
+                                    hand.0.sort();
+                                }
+                                SelectedSource::Drawn(_) => {
+                                    if let Some(ref mut drawn) = maybe_drawn {
+                                        drawn.0 = taken;
+                                    }
+                                }
+                                _ => {}
+                            }
+
+                            cheat_log.0.push(CheatEntry {
+                                cheater: player,
+                                target_kawa: kawa_entity,
+                                tile_taken: taken,
+                                tile_left: hand_tile,
+                            });
+
+                            selection.selected = SelectedSource::None;
+
+                            println!("Cheat: swapped {:?} for {:?} from {:?}'s kawa",
+                                hand_tile, taken, kawa_entity);
+                        }
+                    });
+                }
+            } else {
+                ui.label("Select a tile from your hand first.");
+            }
+        });
+}
+
+
+pub fn accusation_ui_system(
+    mut contexts: EguiContexts,
+    timer: Res<AccusationTimer>,
+    human_query: Query<Entity, With<HumanPlayer>>,
+    suspects: Query<(Entity, &Jikaze, &Points), (With<Alive>, Without<HumanPlayer>)>,
+    mut accuse_writer: MessageWriter<AccuseCheatMessage>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let Ok(human) = human_query.single() else { return };
+
+    egui::Window::new("Was someone cheating?")
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label(format!("Time remaining: {:.1}s", timer.0.remaining_secs()));
+            ui.separator();
+
+            for (entity, jikaze, points) in suspects.iter() {
+                if ui.button(format!("Accuse {} ({:?}, {}pts)",
+                    entity, jikaze.0, points.0)).clicked()
+                {
+                    accuse_writer.write(AccuseCheatMessage {
+                        accuser: human,
+                        suspect: entity,
+                    });
+                }
+            }
+
+            ui.separator();
+            ui.label("Or wait for the timer to expire.");
+        });
+}
+
 
 // !for testing 
 pub fn debug_ui_system(

@@ -59,7 +59,7 @@ pub enum Wind {
 
 impl Wind {
     // riichi sticks distribution
-    pub fn to_num(&self) -> u8 {
+    pub fn to_num(self) -> u8 {
         match self {
             Wind::East => 0,
             Wind::South => 1,

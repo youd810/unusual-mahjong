@@ -33,12 +33,117 @@ pub fn blackout_check_system(
 
     commands.insert_resource(KawaSnapshot { all_kawa });
     commands.insert_resource(PreBlackoutState(state.get().clone()));
+    commands.insert_resource(CheatLog::default());
     commands.insert_resource(BlackoutTimer(Timer::from_seconds(
         rand::rng().random_range(1.0..=5.0),
         TimerMode::Once,
     )));
 
     next_state.set(TurnState::Blackout);
+}
+
+pub fn blackout_timer_system(
+    time: Res<Time>,
+    mut timer: ResMut<BlackoutTimer>,
+    mut next_state: ResMut<NextState<TurnState>>,
+    mut commands: Commands,
+) {
+    timer.0.tick(time.delta());
+    if timer.0.just_finished() {
+        commands.insert_resource(AccusationTimer(
+            Timer::from_seconds(5.0, TimerMode::Once)
+        ));
+        next_state.set(TurnState::AccusationWindow);
+    }
+}
+
+
+pub fn cleanup_blackout(
+    mut commands: Commands,
+    mut selection: ResMut<BlackoutTileSelection>,
+) {
+    commands.remove_resource::<BlackoutTimer>();
+    selection.selected = SelectedSource::None;
+}
+
+
+pub fn accusation_window_system(
+    time: Res<Time>,
+    mut timer: ResMut<AccusationTimer>,
+    pre_blackout: Res<PreBlackoutState>,
+    mut next_state: ResMut<NextState<TurnState>>,
+) {
+    timer.0.tick(time.delta());
+    if timer.0.just_finished() {
+        let return_state = pre_blackout.0.clone();
+        next_state.set(return_state);
+    }
+}
+
+
+pub fn resolve_accusation(
+    mut messages: MessageReader<AccuseCheatMessage>,
+    cheat_log: Res<CheatLog>,
+    human_query: Query<Has<HumanPlayer>>,
+    pre_blackout: Res<PreBlackoutState>,
+    mut revolver: ResMut<Revolver>,
+    mut next_state: ResMut<NextState<TurnState>>,
+    mut commands: Commands,
+) {
+    let Some(message) = messages.read().next() else { return };
+
+    let suspect_cheated = cheat_log.0.iter()
+        .any(|entry| entry.cheater == message.suspect);
+
+    let (_, target) = if suspect_cheated {
+        println!("{} correctly accused {}!", message.accuser, message.suspect);
+        (message.accuser, message.suspect)
+    } else {
+        println!("{} falsely accused {}!", message.accuser, message.suspect);
+        (message.suspect, message.accuser)
+    };
+
+    let is_human = human_query.get(target).unwrap_or(false);
+
+    if revolver.pull() {
+        println!("BANG! {} is eliminated!", target);
+        commands.entity(target).remove::<Alive>();
+        commands.entity(target).remove::<Hand>();
+        commands.entity(target).remove::<OpenMentsu>();
+        commands.entity(target).remove::<Kawa>();
+        commands.entity(target).remove::<ClosedHand>();
+        commands.entity(target).remove::<Tenpai>();
+        commands.entity(target).remove::<Riichi>();
+        commands.entity(target).remove::<Ippatsu>();
+        commands.entity(target).remove::<DoubleRiichi>();
+        commands.entity(target).remove::<Furiten>();
+        commands.entity(target).remove::<DrawnTile>();
+
+        if is_human {
+            println!("ゲーム終了\nYou died.");
+            commands.remove_resource::<AccusationTimer>();
+            commands.remove_resource::<KawaSnapshot>();
+            commands.remove_resource::<PreBlackoutState>();
+            commands.remove_resource::<CheatLog>();
+            next_state.set(TurnState::GameOver);
+            return;
+        }
+    } else {
+        println!("*click* {} survives.", target);
+    }
+
+    let return_state = pre_blackout.0.clone();
+    next_state.set(return_state);
+}
+
+
+pub fn cleanup_accusation(
+    mut commands: Commands,
+) {
+    commands.remove_resource::<AccusationTimer>();
+    commands.remove_resource::<KawaSnapshot>();
+    commands.remove_resource::<PreBlackoutState>();
+    commands.remove_resource::<CheatLog>();
 }
 
 
@@ -1322,7 +1427,6 @@ pub fn discard_tile(
 }
 
 
-
 pub fn next_turn(
     mut current_turn: ResMut<CurrentTurn>,
     query: Query<(Entity, &Jikaze), With<Alive>>,
@@ -1346,8 +1450,6 @@ pub fn next_turn(
         }
     }
 }
-
-
 
 
 pub fn auto_advance_call_window(

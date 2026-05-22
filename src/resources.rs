@@ -123,3 +123,26 @@ pub struct BlackoutTimer(pub Timer);
 
 #[derive(Resource)]
 pub struct AccusationTimer(pub Timer);
+
+#[derive(Resource, Default)]
+pub struct CheatLog(pub Vec<CheatEntry>);
+
+pub struct CheatEntry {
+    pub cheater: Entity,
+    pub target_kawa: Entity,
+    pub tile_taken: Tile,
+    pub tile_left: Tile,
+}
+
+#[derive(Default, Clone)]
+pub enum SelectedSource {
+    #[default]
+    None,
+    Hand(usize, Tile),
+    Drawn(Tile),
+}
+
+#[derive(Resource, Default)]
+pub struct BlackoutTileSelection {
+     pub selected: SelectedSource,
+}

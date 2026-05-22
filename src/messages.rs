@@ -48,3 +48,10 @@ pub struct DiscardTileMessage {
     pub tile: Tile,
     pub is_tsumogiri: bool, 
 }
+
+
+#[derive(Message)]
+pub struct AccuseCheatMessage {
+    pub accuser: Entity,
+    pub suspect: Entity,
+}
