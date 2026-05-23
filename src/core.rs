@@ -217,7 +217,7 @@ pub fn tiles_to_frequency_array(tiles: &[Tile]) -> [u8; 34] {
 
 pub fn count_blocks(pos: usize, mentsu: u8, partials: u8, freq_array: &mut [u8; 34], has_pair: u8) -> i32 {
     if pos == 34 {
-        let valid_partials = partials.min(4 - mentsu);
+        let valid_partials = partials.min(4u8.saturating_sub(mentsu));
         return 8 - (2 * mentsu as i32) - (valid_partials as i32) - (has_pair as i32);
     }
     let mut min_shanten = count_blocks(pos + 1, mentsu, partials, freq_array, has_pair);

@@ -8,6 +8,20 @@ pub struct PlayerTag;
 #[derive(Component)]
 pub struct HumanPlayer;
 
+#[derive(Component, Debug, Clone)]
+pub struct BotProfile {
+    pub aggressiveness: f32,
+    pub cheat_tendency: f32,
+    pub speed: f32,
+    pub read: f32,
+    pub composure: f32,
+}
+
+#[derive(Component)]
+pub struct BotCheatIntent {
+    pub execute_at: f32,
+}
+
 #[derive(Component)]
 pub struct Jikaze(pub Wind);
 

@@ -1,6 +1,8 @@
 use bevy::prelude::*;
+use rand::{RngExt, seq::IndexedRandom};
 
 use crate::core::*;
+use crate::scoring::*;
 use crate::components::*;
 use crate::resources::*;
 use crate::messages::*;
@@ -18,7 +20,7 @@ pub fn bot_discard_system(
     if let Ok((player, drawn, hand, open_mentsu, is_selecting)) = query.get(current_turn.0) {
         println!("{} draws {:?}", current_turn.0, drawn.0);
 
-        let mut hand_plus_drawn = hand.0.clone();
+        let mut hand_plus_drawn = hand.0.to_owned();
         hand_plus_drawn.push(drawn.0);
 
         let mut visible_tiles = [0; 34];
@@ -157,4 +159,136 @@ pub fn bot_main_phase_system(
         }
 
     } 
+}
+
+
+pub fn bot_cheat_decision_system(
+    query: Query<(Entity, &BotProfile), Without<HumanPlayer>>,
+    timer: Res<BlackoutTimer>,
+    mut commands: Commands,
+) {
+    let duration = timer.0.duration().as_secs_f32();
+    let mut rng = rand::rng();
+
+    for (entity, profile) in &query {
+        let probability = profile.cheat_tendency * (duration / 5.0);
+
+        if rng.random::<f32>() < probability {
+            let execute_at = rng.random_range(1.0..=duration);
+            commands.entity(entity).insert(BotCheatIntent { execute_at });
+        }
+    }
+}
+
+pub fn bot_cheat_execution_system(
+    mut query: Query<(Entity, &mut Hand, &OpenMentsu, Option<&mut DrawnTile>, &BotCheatIntent, Has<Riichi>), Without<HumanPlayer>>,
+    mut kawa_query: Query<(Entity, &mut Kawa)>,
+    open_query: Query<&OpenMentsu>,
+    dead_wall: Res<DeadWall>,
+    timer: Res<BlackoutTimer>,
+    mut cheat_log: ResMut<CheatLog>,
+    mut commands: Commands,
+) {
+    let elapsed = timer.0.elapsed_secs();
+    let mut rng = rand::rng();
+
+    for (bot_entity, mut hand, open_mentsu, mut maybe_drawn, intent, is_riichi) in query.iter_mut() {
+        if elapsed < intent.execute_at { continue; }
+
+        if hand.0.is_empty() {
+            commands.entity(bot_entity).remove::<BotCheatIntent>();
+            continue;
+        }
+
+        //  hand + drawn tile (if any)
+        let mut full_hand = hand.0.clone();
+        if let Some(ref drawn) = maybe_drawn {
+            full_hand.push(drawn.0);
+        }
+
+        let mut visible_tiles = [0i32; 34];
+        for (_, kawa) in kawa_query.iter() {
+            for tile in &kawa.0 { visible_tiles[tile_to_index(tile)] += 1; }
+        }
+        for open in open_query.iter() {
+            for mentsu in &open.0 {
+                for tile in mentsu.tiles() { visible_tiles[tile_to_index(tile)] += 1; }
+            }
+        }
+        for tile in &dead_wall.dora_indicators {
+            visible_tiles[tile_to_index(tile)] += 1;
+        }
+
+        let combined_current = combine_tiles(&full_hand, &open_mentsu.0);
+        let mut current_freq = tiles_to_frequency_array(&combined_current);
+        let current_shanten = calculate_shanten_from_array(&mut current_freq);
+        let current_ukeire: i32 = ukeire_tiles(&mut current_freq, current_shanten).iter()
+            .map(|&j| (4 - current_freq[j] as i32 - visible_tiles[j]).max(0))
+            .sum();
+        let current_dora = count_dora(&combined_current, &*dead_wall, is_riichi).dora as i32;
+
+        let baseline_score = (current_shanten, -current_ukeire, -current_dora);
+        let mut best_score = baseline_score;
+        let mut best_swaps = Vec::new();
+
+        // ! consider bot not stealing from their own kawa (makes it easier to figure out the cheater)
+        for (target_entity, target_kawa) in kawa_query.iter() {
+            for (kawa_idx, kawa_tile) in target_kawa.0.iter().enumerate() {
+                for (hand_idx, hand_tile) in full_hand.iter().enumerate() {
+                    let mut temp_hand = full_hand.to_owned();
+                    temp_hand[hand_idx] = *kawa_tile;
+
+                    let combined_temp = combine_tiles(&temp_hand, &open_mentsu.0);
+                    let mut temp_freq = tiles_to_frequency_array(&combined_temp);
+                    let shanten = calculate_shanten_from_array(&mut temp_freq);
+
+                    if shanten > best_score.0 { continue; }
+
+                    let ukeire: i32 = ukeire_tiles(&mut temp_freq, shanten).iter()
+                        .map(|&j| (4 - temp_freq[j] as i32 - visible_tiles[j]).max(0))
+                        .sum();
+                    let dora = count_dora(&combined_temp, &*dead_wall, is_riichi).dora as i32;
+
+                    let score = (shanten, -ukeire, -dora);
+
+                    if score < best_score {
+                        best_score = score;
+                        best_swaps.clear();
+                        best_swaps.push((target_entity, kawa_idx, *kawa_tile, hand_idx, *hand_tile));
+                    } else if score == best_score && score < baseline_score {
+                        best_swaps.push((target_entity, kawa_idx, *kawa_tile, hand_idx, *hand_tile));
+                    }
+
+                }
+            }
+        }
+
+        if !best_swaps.is_empty() {
+            let swap = best_swaps.choose(&mut rng).unwrap();
+            let (target_entity, kawa_idx, stolen_tile, hand_idx, bot_tile) = *swap;
+
+            if let Ok((_, mut target_kawa)) = kawa_query.get_mut(target_entity) {
+                target_kawa.0[kawa_idx] = bot_tile;
+
+                if hand_idx < hand.0.len() {
+                    hand.0[hand_idx] = stolen_tile;
+                    hand.0.sort();
+                } else if let Some(ref mut drawn) = maybe_drawn {
+                    drawn.0 = stolen_tile;
+                }
+
+                cheat_log.0.push(CheatEntry {
+                    cheater: bot_entity,
+                    target_kawa: target_entity,
+                    tile_taken: stolen_tile,
+                    tile_left: bot_tile,
+                });
+
+                println!("Cheat: Bot {:?} grabbed {:?} (gave {:?}) from {:?}",
+                    bot_entity, stolen_tile, bot_tile, target_entity);
+            }
+        }
+
+        commands.entity(bot_entity).remove::<BotCheatIntent>();
+    }
 }

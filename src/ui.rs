@@ -153,6 +153,7 @@ pub fn call_window_ui_system(
                             .remove::<ChiOption>()
                             .remove::<DaiminkanOption>();
                     }
+                    
                 });
             });
     }
@@ -457,8 +458,8 @@ pub fn blackout_ui_system(
             if let Some(hand_tile) = selected_tile {
                 ui.label(format!("Selected: {:?} — now pick a kawa tile to swap with:", hand_tile));
 
-                for (kawa_entity, mut kawa, jikaze) in kawa_query.iter_mut() {
-                    if kawa_entity == player || kawa.0.is_empty() {
+                for (kawa_owner, mut kawa, jikaze) in kawa_query.iter_mut() {
+                    if kawa.0.is_empty() { // || player == kawa_owner <- leave this for now
                         continue;
                     }
 
@@ -489,7 +490,7 @@ pub fn blackout_ui_system(
 
                             cheat_log.0.push(CheatEntry {
                                 cheater: player,
-                                target_kawa: kawa_entity,
+                                target_kawa: kawa_owner,
                                 tile_taken: taken,
                                 tile_left: hand_tile,
                             });
@@ -497,7 +498,7 @@ pub fn blackout_ui_system(
                             selection.selected = SelectedSource::None;
 
                             println!("Cheat: swapped {:?} for {:?} from {:?}'s kawa",
-                                hand_tile, taken, kawa_entity);
+                                hand_tile, taken, kawa_owner);
                         }
                     });
                 }

@@ -57,6 +57,7 @@ pub fn get_dora_from_indicator(indicator: &Tile) -> Tile {
     }
 }
 
+// ! note to self: you forgot open mentsu dumbass
 pub fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool) -> DoraCount {
     let mut dora_count = DoraCount {
         dora: 0,

@@ -177,9 +177,6 @@ pub fn build_shot_queue(
         }
     }
 
-    // TODO: emotional threshold
-
-
     // low han self-shot
     for (winner, result, _) in &outcome.winners {
         if result.is_low_han() {
