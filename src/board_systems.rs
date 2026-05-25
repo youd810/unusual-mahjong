@@ -139,11 +139,16 @@ pub fn resolve_accusation(
 
 pub fn cleanup_accusation(
     mut commands: Commands,
+    query: Query<Entity, With<BotAccusationIntent>>,
 ) {
     commands.remove_resource::<AccusationTimer>();
     commands.remove_resource::<KawaSnapshot>();
     commands.remove_resource::<PreBlackoutState>();
     commands.remove_resource::<CheatLog>();
+
+    for entity in query {
+        commands.entity(entity).remove::<BotAccusationIntent>();
+    }
 }
 
 
@@ -671,13 +676,19 @@ pub fn declare_kyuushu(
             if can_declare_kyuushu(&combined, game.calls_made, kawa) {
                 println!("{} declares Kyuushu Kyuuhai!", message.player);
                 commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
+                commands.insert_resource(RoundOutcome {
+                    winners: vec![],  
+                    loser: None,             
+                    is_tsumo: false,
+                    tochuu_causer: vec![message.player],
+                });
                 next_state.set(TurnState::RoundEnd);
             }
         }
     }
 }
 
-
+// ! why does this take 3 players as the causer?
 pub fn suufon_renda(
     game: Res<GameState>,
     query: Query<&Kawa>,
@@ -1459,9 +1470,10 @@ pub fn auto_advance_call_window(
     tile_query: Query<(Entity, &DiscardedTile), With<CurrentDiscard>>,
     furiten_check: Query<(Entity, &Tenpai)>,
     mut commands: Commands,
+    lock: Res<CallLock>,
 ) {
     // wait for human input
-    if !human_options.is_empty() {
+    if !human_options.is_empty() || lock.0 {
         return;
     }
 

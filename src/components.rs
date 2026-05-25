@@ -23,6 +23,14 @@ pub struct BotCheatIntent {
 }
 
 #[derive(Component)]
+pub struct BotAccusationIntent {
+    pub suspect: Entity,
+    pub confidence: f32,
+    pub accuse_at: f32,
+}
+
+
+#[derive(Component)]
 pub struct Jikaze(pub Wind);
 
 #[derive(Component)]
@@ -134,3 +142,5 @@ pub struct DrawnTile(pub Tile);
 
 #[derive(Component)]
 pub struct ForbiddenDiscard(pub Vec<Tile>);
+
+

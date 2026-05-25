@@ -547,7 +547,7 @@ pub fn accusation_ui_system(
 // !for testing 
 pub fn debug_ui_system(
     mut contexts: EguiContexts,
-    mut query: Query<(Entity, &mut Hand, Option<&mut DrawnTile>), With<HumanPlayer>>,
+    mut query: Query<(Entity, &mut Hand, Option<&mut DrawnTile>, Has<HumanPlayer>)>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
@@ -556,7 +556,7 @@ pub fn debug_ui_system(
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(10.0, -10.0))
         .show(ctx, |ui| {
             if ui.button("Force Daisangen").clicked() 
-            && let Ok((player, mut hand, mut drawn)) = query.single_mut() {
+            && let Some((player, mut hand, drawn, _)) = query.iter_mut().find(|(_, _, _, is_human)| *is_human) {
                 hand.0 = vec![
                     Tile::Honor(Honor::White), Tile::Honor(Honor::White), Tile::Honor(Honor::White),
                     Tile::Honor(Honor::Green), Tile::Honor(Honor::Green), Tile::Honor(Honor::Green),
@@ -582,9 +582,40 @@ pub fn debug_ui_system(
                     }
                 });
 
-                println!("Debug: Hand swapped to Daisangen.");
-            }
+                println!("Debug: Hand swapped to Daisangen for Human.");
             
-            // TODO: add more
+            }
+
+            if ui.button("Force Suufon Renda").clicked() {
+                for (_, mut hand, drawn, _) in query.iter_mut() {
+                    for tile in hand.0.iter_mut() {
+                        *tile = Tile::Honor(Honor::West);
+                    }
+                    
+                    if let Some(mut d) = drawn {
+                        d.0 = Tile::Honor(Honor::West);
+                    }
+                }
+                println!("Debug: Forced a West wind into all hands/draws.");
+            }
+
+            if ui.button("Force Kyuushu Kyuuhai (Human)").clicked() 
+            && let Some((_, mut hand, _, _)) = query.iter_mut().find(|(_, _, _, is_human)| *is_human) {
+                hand.0 = vec![
+                    Tile::Man(1), Tile::Man(9),
+                    Tile::Pin(1), Tile::Pin(9),
+                    Tile::Sou(1), Tile::Sou(9),
+                    Tile::Honor(Honor::East), Tile::Honor(Honor::South), Tile::Honor(Honor::West), Tile::Honor(Honor::North),
+                    Tile::Honor(Honor::White), Tile::Honor(Honor::Green), Tile::Honor(Honor::Red),
+                ];
+                println!("Debug: Set Human hand to 13 orphans base (Kyuushu Kyuuhai).");
+            }
+
+            if ui.button("Force Suucha Riichi").clicked() {
+                for (entity, _, _, _) in query.iter_mut() {
+                    commands.entity(entity).insert(Riichi {turns_since: 0});
+                }
+                println!("Debug: Forced Riichi onto all players.");
+            }
         });
 }

@@ -10,18 +10,20 @@ use crate::messages::*;
 
 pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
-    query: Query<(Entity, &DrawnTile, &Hand, &OpenMentsu, Has<RiichiSelecting>), Without<HumanPlayer>>,
+    query: Query<(Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, Has<RiichiSelecting>), Without<HumanPlayer>>,
     visible_query: Query<(&OpenMentsu, &Kawa, Has<Riichi>)>,
     dead_wall: Res<DeadWall>,
     mut messages: MessageWriter<DiscardTileMessage>,
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
     mut commands: Commands,
 ) {
-    if let Ok((player, drawn, hand, open_mentsu, is_selecting)) = query.get(current_turn.0) {
-        println!("{} draws {:?}", current_turn.0, drawn.0);
+    if let Ok((player, maybe_drawn, hand, open_mentsu, is_selecting)) = query.get(current_turn.0) {
 
         let mut hand_plus_drawn = hand.0.to_owned();
-        hand_plus_drawn.push(drawn.0);
+        if let Some(drawn) = maybe_drawn {
+            hand_plus_drawn.push(drawn.0);
+        }
+        
 
         let mut visible_tiles = [0; 34];
         let mut safe_tiles = vec![];
@@ -53,10 +55,9 @@ pub fn bot_discard_system(
             messages.write(DiscardTileMessage {
                 player: current_turn.0,
                 tile: discard,
-                is_tsumogiri: drawn.0 == discard,
+                is_tsumogiri: maybe_drawn.is_some_and(|drawn| drawn.0 == discard),
             });
         }
-        println!("{} discards {:?}", current_turn.0, discard);
     }
 }
 
@@ -118,6 +119,10 @@ pub fn bot_call_system(
                     discarded_by: discarded_by.0,
                 });
             }
+        } else {
+            if kan.is_some() { commands.entity(player).remove::<DaiminkanOption>(); }
+            if pon.is_some() { commands.entity(player).remove::<PonOption>(); }
+            if chi.is_some() { commands.entity(player).remove::<ChiOption>(); }
         }   
     
     }
@@ -290,5 +295,112 @@ pub fn bot_cheat_execution_system(
         }
 
         commands.entity(bot_entity).remove::<BotCheatIntent>();
+    }
+}
+
+
+pub fn bot_accusation_decision_system(
+    query: Query<(Entity, &BotProfile, &Jikaze), (Without<HumanPlayer>, With<Alive>)>,
+    all_alive: Query<(Entity, &Jikaze), With<Alive>>,
+    jikaze_query: Query<&Jikaze>,
+    snapshot: Res<KawaSnapshot>,
+    kawa_query: Query<(Entity, &Kawa, &Jikaze), With<Alive>>,
+    cheat_log: Res<CheatLog>,
+    revolver: Res<Revolver>,
+    timer: Res<AccusationTimer>,
+    mut commands: Commands,
+) {
+    let mut rng = rand::rng();
+    let death_risk = 1.0 / (7 - revolver.chamber) as f32;
+
+    for (bot_entity, profile, bot_jikaze) in &query {
+        
+        let mut detected_tampering: Vec<Entity> = Vec::new();
+
+        // scan kawa
+        for (snap_entity, snap_kawa) in &snapshot.all_kawa {
+            let Ok(target_jikaze) = jikaze_query.get(*snap_entity) else { continue };
+            let distance = bot_jikaze.0.distance_to(&target_jikaze.0);
+
+            let can_remember = match distance {
+                0 => true,
+                1 | 3 => profile.read >= 0.4, // kamicha | shimocha
+                2 => profile.read >= 0.8,
+                _ => false,
+            };
+
+            if !can_remember { continue; }
+
+            if let Some((_, current_kawa, _)) = kawa_query.iter().find(|(e, _, _)| *e == *snap_entity) 
+            && current_kawa.0.len() == snap_kawa.len()
+            && current_kawa.0.iter().zip(snap_kawa.iter()).any(|(a, b)| a != b) {
+                detected_tampering.push(*snap_entity);
+            }
+    
+        }
+
+        if detected_tampering.is_empty() { continue; }
+
+        // weigh read to get confidence
+        let (suspect, confidence) = if rng.random::<f32>() < profile.read {
+            let suspect = cheat_log.0.iter()
+                .find(|e| detected_tampering.contains(&e.target_kawa))
+                .map(|e| e.cheater);
+            (suspect, 0.9)
+        } else {
+            let others: Vec<Entity> = all_alive.iter()
+                .filter(|(e, _)| *e != bot_entity)
+                .map(|(e, _)| e)
+                .collect();
+            (others.choose(&mut rng).copied(), 0.5)
+        };
+
+        let Some(suspect) = suspect else { continue };
+        if suspect == bot_entity { continue; }
+
+        // willingness check
+        let willingness = profile.aggressiveness * confidence;
+        if willingness <= death_risk { continue; }
+
+        let duration = timer.0.duration().as_secs_f32();
+        let accuse_at = rng.random_range(0.5..=(duration - 0.5).max(0.5));
+
+        commands.entity(bot_entity).insert(BotAccusationIntent {
+            suspect,
+            confidence,
+            accuse_at,
+        });
+
+        println!("Bot {:?} plans to accuse {:?} at {:.1}s (conf {:.2})",
+            bot_entity, suspect, accuse_at, confidence);
+    }
+}
+
+
+pub fn bot_accusation_execution_system(
+    query: Query<(Entity, &BotAccusationIntent), With<Alive>>,
+    timer: Res<AccusationTimer>,
+    mut accuse_writer: MessageWriter<AccuseCheatMessage>,
+    mut commands: Commands,
+) {
+    let elapsed = timer.0.elapsed_secs();
+
+    let mut earliest: Option<(Entity, &BotAccusationIntent)> = None;
+
+    for (entity, intent) in &query {
+        if elapsed >= intent.accuse_at && earliest.is_none() || intent.accuse_at < earliest.unwrap().1.accuse_at {
+            earliest = Some((entity, intent));
+        }
+    }
+
+    if let Some((accuser, intent)) = earliest {
+        accuse_writer.write(AccuseCheatMessage {
+            accuser,
+            suspect: intent.suspect,
+        });
+
+        for (entity, _) in &query {
+            commands.entity(entity).remove::<BotAccusationIntent>();
+        }
     }
 }
