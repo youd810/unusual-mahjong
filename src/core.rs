@@ -22,22 +22,22 @@ pub enum Honor {
     South,
 }
 
-// TODO: test and change to array later 
-#[derive(PartialEq, Eq, Clone, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 pub enum Mentsu {
-    Jantou(Vec<Tile>),
-    Koutsu(Vec<Tile>, bool), // true = closed
-    Shuntsu(Vec<Tile>, bool),
-    Ankan(Vec<Tile>),
-    Daiminkan(Vec<Tile>),
-    Shouminkan(Vec<Tile>),
+    Jantou([Tile; 2]),
+    Koutsu([Tile; 3], bool), // true = closed
+    Shuntsu([Tile; 3], bool),
+    Ankan([Tile; 4]),
+    Daiminkan([Tile; 4]),
+    Shouminkan([Tile; 4]),
 }
 
 impl Mentsu {
     pub fn tiles(&self) -> &[Tile] {
         match self {
-            Mentsu::Jantou(t) | Mentsu::Ankan(t) | Mentsu::Daiminkan(t) | Mentsu::Shouminkan(t) => t,
+            Mentsu::Jantou(t) => t,
             Mentsu::Koutsu(t, _) | Mentsu::Shuntsu(t, _) => t,
+            Mentsu::Ankan(t) | Mentsu::Daiminkan(t) | Mentsu::Shouminkan(t) => t,
         }
     }
 }
@@ -139,7 +139,7 @@ pub fn decompose(tiles: &[Tile]) -> Vec<Vec<Mentsu>> {
             if i > 0 && tiles[i] == tiles[i-1]{
                 continue;
             }
-            let pair = Mentsu::Jantou(vec![tiles[i], tiles[i+1]]);
+            let pair = Mentsu::Jantou([tiles[i], tiles[i+1]]);
             let mut remaining = tiles.to_owned();
             // removes jantou from mentsu check
             remaining.remove(i + 1);
@@ -160,7 +160,7 @@ pub fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<V
 
     // koutsu check
     if remaining.len() >= 3 && remaining[0] == remaining[1] && remaining[0] == remaining[2] {
-        let koutsu_group = Mentsu::Koutsu(vec![remaining[0], remaining[1], remaining[2]], true);
+        let koutsu_group = Mentsu::Koutsu([remaining[0], remaining[1], remaining[2]], true);
         let mut new_remaining = remaining.to_owned();
         for _ in 0..3 {
             new_remaining.remove(0);
@@ -175,7 +175,7 @@ pub fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<V
         && let Some(third) = next_tile_sequence(&second)
         && let Some(second_seq) = remaining.iter().skip(1).position(|x| *x == second).map(|i| i + 1)
         && let Some(third_seq) = remaining.iter().skip(second_seq + 1).position(|x| *x == third).map(|i| i + second_seq + 1) {
-            let shuntsu_group = Mentsu::Shuntsu(vec![remaining[0], remaining[second_seq], remaining[third_seq]], true);
+            let shuntsu_group = Mentsu::Shuntsu([remaining[0], remaining[second_seq], remaining[third_seq]], true);
             let mut new_remaining = remaining.to_owned();
             // starts from the highest index
             for idx in [third_seq, second_seq, 0] {
@@ -422,14 +422,7 @@ pub fn combine_tiles(hand: &[Tile], open_mentsu: &Vec<Mentsu>) -> Vec<Tile> {
     let mut result = hand.to_owned();
 
     for mentsu in open_mentsu{
-        if let 
-            Mentsu::Koutsu(tiles, _) 
-                | Mentsu::Shuntsu(tiles, _) 
-                | Mentsu::Ankan(tiles) 
-                | Mentsu::Daiminkan(tiles) 
-                | Mentsu::Shouminkan(tiles) = mentsu {
-                result.extend(tiles)
-            }
+            result.extend(mentsu.tiles());
     };
     result
 }
@@ -528,13 +521,12 @@ pub fn has_shuntsu(result: &[Mentsu], first_tile: Tile) -> bool {
 
 pub fn has_koutsu_or_kan(result: &[Mentsu], first_tile: Tile) -> bool{
     result.iter().any(|mentsu|{
-        if let Mentsu::Koutsu(tiles, _) 
-            | Mentsu::Ankan(tiles) 
+        match mentsu {
+            Mentsu::Koutsu(tiles, _) => tiles[0] == first_tile,
+            Mentsu::Ankan(tiles) 
             | Mentsu::Daiminkan(tiles)
-            | Mentsu::Shouminkan(tiles)  = mentsu {
-            tiles[0] == first_tile 
-        } else {
-            false
+            | Mentsu::Shouminkan(tiles) => tiles[0] == first_tile,
+            _ => false
         }
     })
 }
@@ -638,12 +630,7 @@ pub fn can_declare_ron(
     let mut combined_hand = hand.to_owned();
     combined_hand.push(*discard_tile);
     for mentsu in open_mentsu {
-        match mentsu {
-            Mentsu::Koutsu(tiles, _) | Mentsu::Shuntsu(tiles, _)
-            | Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles)
-            | Mentsu::Shouminkan(tiles) => combined_hand.extend(tiles),
-            _ => {}
-        }
+        combined_hand.extend(mentsu.tiles());
     }
     combined_hand.sort();
 
@@ -715,12 +702,7 @@ pub fn can_declare_tsumo(
     let mut combined_hand = hand.to_owned();
     combined_hand.push(*drawn_tile);
     for mentsu in open_mentsu {
-        match mentsu {
-            Mentsu::Koutsu(tiles, _) | Mentsu::Shuntsu(tiles, _)
-            | Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles)
-            | Mentsu::Shouminkan(tiles) => combined_hand.extend(tiles),
-            _ => {}
-        }
+        combined_hand.extend(mentsu.tiles());
     }
     combined_hand.sort();
 
