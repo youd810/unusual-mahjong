@@ -1,4 +1,5 @@
 use crate::components::*;
+use crate::core::Honor::Red;
 use crate::yaku::*;
 use crate::scoring::*;
 use crate::resources::*;
@@ -58,6 +59,15 @@ pub enum Wind {
 }
 
 impl Wind {
+    pub fn wind_to_honor(&self) -> Honor {
+        match self {
+            Wind::East => Honor::East,
+            Wind::South => Honor::South,
+            Wind::West => Honor::West,
+            Wind::North => Honor::North,
+        }
+    }
+
     // riichi sticks distribution
     pub fn to_num(self) -> u8 {
         match self {
@@ -366,36 +376,34 @@ pub fn index_to_tile(index: usize) -> Tile {
 }
 
 pub fn evaluate_discard(
-    hand_plus_drawn: &[Tile], 
-    open_mentsu: &Vec<Mentsu>, 
-    visible_tiles: &[u8; 34], 
-    safe_tiles: &[Vec<Tile>], 
+    hand_plus_drawn: &[Tile],
+    open_mentsu: &Vec<Mentsu>,
+    visible_tiles: &[u8; 34],
+    safe_tiles: &[Tile],
+    should_defend: bool,
 ) -> Tile {
     let mut safe_map = [0; 34];
     let mut has_safe_tiles = false;
-    for kawa in safe_tiles {
-        for tile in kawa {
-            safe_map[tile_to_index(tile)] += 1;
-            if hand_plus_drawn.contains(tile) {
-                has_safe_tiles = true;
-            }
+
+    for tile in safe_tiles {
+        safe_map[tile_to_index(tile)] += 1;
+        if hand_plus_drawn.contains(tile) {
+            has_safe_tiles = true;
         }
     }
-    
-    let combined_hand= combine_tiles(hand_plus_drawn, open_mentsu);
+
+    let combined_hand = combine_tiles(hand_plus_drawn, open_mentsu);
     let mut freq_array = tiles_to_frequency_array(&combined_hand);
     let mut best_index = 0;
     let mut lowest_shanten = 8;
     let mut max_ukeire_count = 0;
-    let should_defend = calculate_shanten_from_array(&mut freq_array.to_owned()) > 1;
 
     for i in 0..34 {
-        if (freq_array[i] == 0 || !hand_plus_drawn.contains(&index_to_tile(i))) || (has_safe_tiles && safe_map[i] == 0  && should_defend) { 
-            continue; 
+        if freq_array[i] == 0 || !hand_plus_drawn.contains(&index_to_tile(i)) || (has_safe_tiles && safe_map[i] == 0 && should_defend) {
+            continue;
         }
 
         freq_array[i] -= 1;
-
         let shanten = calculate_shanten_from_array(&mut freq_array);
 
         if shanten <= lowest_shanten {
@@ -404,8 +412,7 @@ pub fn evaluate_discard(
                 .map(|&j| 4u8.saturating_sub(freq_array[j]).saturating_sub(visible_tiles[j]))
                 .sum();
 
-            if shanten < lowest_shanten 
-                || (shanten == lowest_shanten && ukeire_count > max_ukeire_count) {
+            if shanten < lowest_shanten || (shanten == lowest_shanten && ukeire_count > max_ukeire_count) {
                 best_index = i;
                 lowest_shanten = shanten;
                 max_ukeire_count = ukeire_count;
@@ -415,6 +422,31 @@ pub fn evaluate_discard(
         freq_array[i] += 1;
     }
     index_to_tile(best_index)
+}
+
+
+pub fn check_open_yaku(combined_hand: &[Tile], jikaze: &Wind, bakaze: &Wind) -> bool {
+    // 1. Tanyao check
+    if tanyao(combined_hand) {
+        return true;
+    }
+
+    // 2. Yakuhai check
+    let freq = tiles_to_frequency_array(combined_hand);
+
+    let yakuhai_indexes =[
+        tile_to_index(&Tile::Honor(Honor::Red)),
+        tile_to_index(&Tile::Honor(Honor::Green)),
+        tile_to_index(&Tile::Honor(Honor::White)),
+        tile_to_index(&Tile::Honor(jikaze.wind_to_honor())),
+        tile_to_index(&Tile::Honor(bakaze.wind_to_honor())),
+    ];
+
+    if yakuhai_indexes.iter().any(|&idx| freq[idx] >= 2) {
+        return true;
+    }
+
+    false
 }
 
 
@@ -447,15 +479,6 @@ pub fn previous_tile_sequence(tile: &Tile) -> Option<Tile> {
     }
 }
 
-
-pub fn wind_to_honor(wind: &Wind) -> Honor {
-    match wind {
-        Wind::East => Honor::East,
-        Wind::South => Honor::South,
-        Wind::West => Honor::West,
-        Wind::North => Honor::North,
-    }
-}
 
 pub fn is_ryanmen_wait(shuntsu_tiles: &[Tile], winning_tile: &Tile) -> bool {
     if shuntsu_tiles[0] == *winning_tile {

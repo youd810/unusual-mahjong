@@ -10,11 +10,58 @@ pub struct HumanPlayer;
 
 #[derive(Component, Debug, Clone)]
 pub struct BotProfile {
-    pub aggressiveness: f32,
+    pub aggressiveness: f32, // defensive <-> agressive
     pub cheat_tendency: f32,
-    pub speed: f32,
+    pub speed: f32, // hand value <-> speed
     pub read: f32,
-    pub composure: f32,
+    pub emotional_invulnerability: f32,
+    pub composure: f32, // panic <-> calm, starts at 1.0
+}
+
+impl BotProfile {
+    pub fn great() -> Self {
+        BotProfile {
+            aggressiveness: 0.9,
+            cheat_tendency: 0.3,
+            speed: 0.5,
+            read: 0.9,
+            emotional_invulnerability: 1.0,
+            composure: 1.0,
+        }
+    }
+
+    pub fn good() -> Self {
+        BotProfile {
+            aggressiveness: 0.8,
+            cheat_tendency: 0.5,
+            speed: 0.6,
+            read: 0.7,
+            emotional_invulnerability: 0.7,
+            composure: 1.0,
+        }
+    }
+
+    pub fn average() -> Self {
+        BotProfile {
+            aggressiveness: 0.5,
+            cheat_tendency: 0.2,
+            speed: 0.4,
+            read: 0.5,
+            emotional_invulnerability: 0.4,
+            composure: 1.0,
+        }
+    }
+
+    pub fn bad() -> Self {
+        BotProfile {
+            aggressiveness: 0.3,
+            cheat_tendency: 0.1,
+            speed: 0.3,
+            read: 0.3,
+            emotional_invulnerability   : 0.2,
+            composure: 1.0,
+        }
+    }
 }
 
 #[derive(Component)]

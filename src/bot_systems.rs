@@ -10,28 +10,38 @@ use crate::messages::*;
 
 pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
-    query: Query<(Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, Has<RiichiSelecting>), Without<HumanPlayer>>,
+    query: Query<(Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, &BotProfile, Has<RiichiSelecting>), Without<HumanPlayer>>,
     visible_query: Query<(&OpenMentsu, &Kawa, Has<Riichi>)>,
     dead_wall: Res<DeadWall>,
     mut messages: MessageWriter<DiscardTileMessage>,
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
     mut commands: Commands,
 ) {
-    if let Ok((player, maybe_drawn, hand, open_mentsu, is_selecting)) = query.get(current_turn.0) {
-
+    if let Ok((player, maybe_drawn, hand, open_mentsu, profile, is_selecting)) = query.get(current_turn.0) {
         let mut hand_plus_drawn = hand.0.to_owned();
         if let Some(drawn) = maybe_drawn {
             hand_plus_drawn.push(drawn.0);
         }
-        
 
         let mut visible_tiles = [0; 34];
         let mut safe_tiles = vec![];
+        let mut is_threat = false;
+        let mut rng = rand::rng();
+
+        // using composure as a stat penalty
+        let effective_read = (profile.read * profile.composure).max(profile.read - 0.3);
+        let effective_aggressiveness = (profile.aggressiveness * profile.composure).max(profile.aggressiveness - 0.3);
 
         for (open, kawa, is_riichi) in visible_query.iter() {
-            if is_riichi { 
-                safe_tiles.push(kawa.0.to_owned());
-             }
+            if is_riichi || open.0.len() >= 3 {
+                is_threat = true;
+                for tile in kawa.0.iter() {
+                    if rng.random::<f32>() <= effective_read {
+                        safe_tiles.push(*tile);
+                    }
+                }
+            }
+
             for mentsu in open.0.iter() {
                 for tile in mentsu.tiles() {
                     visible_tiles[tile_to_index(tile)] += 1;
@@ -40,13 +50,24 @@ pub fn bot_discard_system(
             for tile in kawa.0.iter() {
                 visible_tiles[tile_to_index(tile)] += 1;
             }
-        }  
+        }
 
         for tile in dead_wall.dora_indicators.iter() {
             visible_tiles[tile_to_index(tile)] += 1;
         }
 
-        let discard = evaluate_discard(&hand_plus_drawn, &open_mentsu.0, &visible_tiles, &safe_tiles);
+        // ! should this be a betaori flag instead?
+        let mut should_defend = false;
+        if is_threat {
+            let panic_threshold = profile.composure + (effective_aggressiveness * 0.20);
+            let panic = rng.random::<f32>() > panic_threshold;
+
+            let current_shanten = calculate_shanten(&combine_tiles(&hand_plus_drawn, &open_mentsu.0));
+
+            should_defend = panic || current_shanten > 1;
+        }
+
+        let discard = evaluate_discard(&hand_plus_drawn, &open_mentsu.0, &visible_tiles, &safe_tiles, should_defend);
 
         if is_selecting {
             riichi_writer.write(DeclareRiichiMessage { player, tile: discard });
@@ -65,8 +86,10 @@ pub fn bot_discard_system(
 pub fn bot_call_system(
     query: Query<(
         Entity,
+        &BotProfile,
         &Hand,
         &OpenMentsu,
+        &Jikaze,
         Option<&RonOption>,
         Option<&PonOption>,
         Option<&ChiOption>,
@@ -77,6 +100,8 @@ pub fn bot_call_system(
         With<HumanPlayer>,
         Or<(With<RonOption>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>
     )>,
+    game: Res<GameState>,
+    dead_wall: Res<DeadWall>,
     mut pon_writer: MessageWriter<DeclarePonMessage>,
     mut chi_writer: MessageWriter<DeclareChiMessage>,
     mut kan_writer: MessageWriter<DeclareKanMessage>,
@@ -86,7 +111,7 @@ pub fn bot_call_system(
 ) {
     let human_is_deciding = !human_options.is_empty();
 
-    for (player, hand, open_mentsu, ron, pon, chi, kan) in query {
+    for (player, profile, hand, open_mentsu, jikaze, ron, pon, chi, kan) in query {
 
         if ron.is_none() && pon.is_none() && chi.is_none() && kan.is_none() {
             continue;
@@ -95,9 +120,7 @@ pub fn bot_call_system(
             continue;
         }
 
-        if human_is_deciding {
-            continue;
-        }
+        if human_is_deciding { continue; }
 
         let mut combined_hand = combine_tiles(&hand.0, &open_mentsu.0);
         let pre_call_shanten = calculate_shanten(&combined_hand);
@@ -105,7 +128,14 @@ pub fn bot_call_system(
         combined_hand.push(discard_query.0);
         let post_call_shanten = calculate_shanten(&combined_hand);
 
-        if post_call_shanten < pre_call_shanten {
+        let has_yaku_path = check_open_yaku(&combined_hand, &jikaze.0, &game.bakaze);
+
+        // ! consider adding composure into the equation (that makes aggressivenes and speed higher)
+        let shanten_chance = (profile.aggressiveness / (post_call_shanten as f32 + 1.0)) * profile.speed;
+        let dora_chance = profile.speed + (count_dora(&combined_hand, &*dead_wall, false).dora as f32 * 0.25);
+
+        let mut rng = rand::rng();
+        if pre_call_shanten >= post_call_shanten && has_yaku_path && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance) {
             if let Some(k) = kan {
                 kan_writer.write(DeclareKanMessage { player, tile: k.0, is_discard: true });
             } else if let Some(p) = pon {

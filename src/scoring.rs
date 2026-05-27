@@ -121,10 +121,10 @@ pub fn calculate_fu(
                 }
                 // these stack
                 if let Tile::Honor(h) = tile {
-                    if *h == wind_to_honor(jikaze) { 
+                    if *h == jikaze.wind_to_honor() { 
                         fu += 2; 
                     }
-                    if *h == wind_to_honor(bakaze) { 
+                    if *h == bakaze.wind_to_honor() { 
                         fu += 2;
                     }
                 }

@@ -80,10 +80,10 @@ pub fn yakuhai(result: &[Mentsu], jikaze: &Wind, bakaze: &Wind) -> u8 {
         } 
 
         if let Tile::Honor(h) = tile {
-            if *h == wind_to_honor(jikaze) { 
+            if *h == jikaze.wind_to_honor() { 
                 count += 1; 
             }
-            if *h == wind_to_honor(bakaze) { 
+            if *h == bakaze.wind_to_honor() { 
                 count += 1; 
             }
         }
@@ -340,8 +340,8 @@ pub fn pinfu(result: &[Mentsu], winning_tile: &Tile, jikaze: &Wind, bakaze: &Win
             Mentsu::Jantou(tiles) => {
                 has_valid_jantou = match tiles[0] {
                     Tile::Honor(Honor::Red | Honor::Green | Honor::White) => false,
-                    Tile::Honor(h) if h == wind_to_honor(jikaze) => false,
-                    Tile::Honor(h) if h == wind_to_honor(bakaze) => false,
+                    Tile::Honor(h) if h == jikaze.wind_to_honor() => false,
+                    Tile::Honor(h) if h == bakaze.wind_to_honor() => false,
                     _ => true,
                 };
             }
