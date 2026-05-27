@@ -1,4 +1,5 @@
 use crate::components::*;
+use crate::core::Honor::Red;
 use crate::yaku::*;
 use crate::scoring::*;
 use crate::resources::*;
@@ -22,22 +23,22 @@ pub enum Honor {
     South,
 }
 
-// TODO: test and change to array later 
-#[derive(PartialEq, Eq, Clone, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 pub enum Mentsu {
-    Jantou(Vec<Tile>),
-    Koutsu(Vec<Tile>, bool), // true = closed
-    Shuntsu(Vec<Tile>, bool),
-    Ankan(Vec<Tile>),
-    Daiminkan(Vec<Tile>),
-    Shouminkan(Vec<Tile>),
+    Jantou([Tile; 2]),
+    Koutsu([Tile; 3], bool), // true = closed
+    Shuntsu([Tile; 3], bool),
+    Ankan([Tile; 4]),
+    Daiminkan([Tile; 4]),
+    Shouminkan([Tile; 4]),
 }
 
 impl Mentsu {
     pub fn tiles(&self) -> &[Tile] {
         match self {
-            Mentsu::Jantou(t) | Mentsu::Ankan(t) | Mentsu::Daiminkan(t) | Mentsu::Shouminkan(t) => t,
+            Mentsu::Jantou(t) => t,
             Mentsu::Koutsu(t, _) | Mentsu::Shuntsu(t, _) => t,
+            Mentsu::Ankan(t) | Mentsu::Daiminkan(t) | Mentsu::Shouminkan(t) => t,
         }
     }
 }
@@ -58,6 +59,15 @@ pub enum Wind {
 }
 
 impl Wind {
+    pub fn wind_to_honor(&self) -> Honor {
+        match self {
+            Wind::East => Honor::East,
+            Wind::South => Honor::South,
+            Wind::West => Honor::West,
+            Wind::North => Honor::North,
+        }
+    }
+
     // riichi sticks distribution
     pub fn to_num(self) -> u8 {
         match self {
@@ -139,7 +149,7 @@ pub fn decompose(tiles: &[Tile]) -> Vec<Vec<Mentsu>> {
             if i > 0 && tiles[i] == tiles[i-1]{
                 continue;
             }
-            let pair = Mentsu::Jantou(vec![tiles[i], tiles[i+1]]);
+            let pair = Mentsu::Jantou([tiles[i], tiles[i+1]]);
             let mut remaining = tiles.to_owned();
             // removes jantou from mentsu check
             remaining.remove(i + 1);
@@ -160,7 +170,7 @@ pub fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<V
 
     // koutsu check
     if remaining.len() >= 3 && remaining[0] == remaining[1] && remaining[0] == remaining[2] {
-        let koutsu_group = Mentsu::Koutsu(vec![remaining[0], remaining[1], remaining[2]], true);
+        let koutsu_group = Mentsu::Koutsu([remaining[0], remaining[1], remaining[2]], true);
         let mut new_remaining = remaining.to_owned();
         for _ in 0..3 {
             new_remaining.remove(0);
@@ -175,7 +185,7 @@ pub fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<V
         && let Some(third) = next_tile_sequence(&second)
         && let Some(second_seq) = remaining.iter().skip(1).position(|x| *x == second).map(|i| i + 1)
         && let Some(third_seq) = remaining.iter().skip(second_seq + 1).position(|x| *x == third).map(|i| i + second_seq + 1) {
-            let shuntsu_group = Mentsu::Shuntsu(vec![remaining[0], remaining[second_seq], remaining[third_seq]], true);
+            let shuntsu_group = Mentsu::Shuntsu([remaining[0], remaining[second_seq], remaining[third_seq]], true);
             let mut new_remaining = remaining.to_owned();
             // starts from the highest index
             for idx in [third_seq, second_seq, 0] {
@@ -366,36 +376,34 @@ pub fn index_to_tile(index: usize) -> Tile {
 }
 
 pub fn evaluate_discard(
-    hand_plus_drawn: &[Tile], 
-    open_mentsu: &Vec<Mentsu>, 
-    visible_tiles: &[u8; 34], 
-    safe_tiles: &[Vec<Tile>], 
+    hand_plus_drawn: &[Tile],
+    open_mentsu: &Vec<Mentsu>,
+    visible_tiles: &[u8; 34],
+    safe_tiles: &[Tile],
+    should_defend: bool,
 ) -> Tile {
     let mut safe_map = [0; 34];
     let mut has_safe_tiles = false;
-    for kawa in safe_tiles {
-        for tile in kawa {
-            safe_map[tile_to_index(tile)] += 1;
-            if hand_plus_drawn.contains(tile) {
-                has_safe_tiles = true;
-            }
+
+    for tile in safe_tiles {
+        safe_map[tile_to_index(tile)] += 1;
+        if hand_plus_drawn.contains(tile) {
+            has_safe_tiles = true;
         }
     }
-    
-    let combined_hand= combine_tiles(hand_plus_drawn, open_mentsu);
+
+    let combined_hand = combine_tiles(hand_plus_drawn, open_mentsu);
     let mut freq_array = tiles_to_frequency_array(&combined_hand);
     let mut best_index = 0;
     let mut lowest_shanten = 8;
     let mut max_ukeire_count = 0;
-    let should_defend = calculate_shanten_from_array(&mut freq_array.to_owned()) > 1;
 
     for i in 0..34 {
-        if (freq_array[i] == 0 || !hand_plus_drawn.contains(&index_to_tile(i))) || (has_safe_tiles && safe_map[i] == 0  && should_defend) { 
-            continue; 
+        if freq_array[i] == 0 || !hand_plus_drawn.contains(&index_to_tile(i)) || (has_safe_tiles && safe_map[i] == 0 && should_defend) {
+            continue;
         }
 
         freq_array[i] -= 1;
-
         let shanten = calculate_shanten_from_array(&mut freq_array);
 
         if shanten <= lowest_shanten {
@@ -404,8 +412,7 @@ pub fn evaluate_discard(
                 .map(|&j| 4u8.saturating_sub(freq_array[j]).saturating_sub(visible_tiles[j]))
                 .sum();
 
-            if shanten < lowest_shanten 
-                || (shanten == lowest_shanten && ukeire_count > max_ukeire_count) {
+            if shanten < lowest_shanten || (shanten == lowest_shanten && ukeire_count > max_ukeire_count) {
                 best_index = i;
                 lowest_shanten = shanten;
                 max_ukeire_count = ukeire_count;
@@ -418,18 +425,36 @@ pub fn evaluate_discard(
 }
 
 
+pub fn check_open_yaku(combined_hand: &[Tile], jikaze: &Wind, bakaze: &Wind) -> bool {
+    // 1. Tanyao check
+    if tanyao(combined_hand) {
+        return true;
+    }
+
+    // 2. Yakuhai check
+    let freq = tiles_to_frequency_array(combined_hand);
+
+    let yakuhai_indexes =[
+        tile_to_index(&Tile::Honor(Honor::Red)),
+        tile_to_index(&Tile::Honor(Honor::Green)),
+        tile_to_index(&Tile::Honor(Honor::White)),
+        tile_to_index(&Tile::Honor(jikaze.wind_to_honor())),
+        tile_to_index(&Tile::Honor(bakaze.wind_to_honor())),
+    ];
+
+    if yakuhai_indexes.iter().any(|&idx| freq[idx] >= 2) {
+        return true;
+    }
+
+    false
+}
+
+
 pub fn combine_tiles(hand: &[Tile], open_mentsu: &Vec<Mentsu>) -> Vec<Tile> {
     let mut result = hand.to_owned();
 
     for mentsu in open_mentsu{
-        if let 
-            Mentsu::Koutsu(tiles, _) 
-                | Mentsu::Shuntsu(tiles, _) 
-                | Mentsu::Ankan(tiles) 
-                | Mentsu::Daiminkan(tiles) 
-                | Mentsu::Shouminkan(tiles) = mentsu {
-                result.extend(tiles)
-            }
+            result.extend(mentsu.tiles());
     };
     result
 }
@@ -454,15 +479,6 @@ pub fn previous_tile_sequence(tile: &Tile) -> Option<Tile> {
     }
 }
 
-
-pub fn wind_to_honor(wind: &Wind) -> Honor {
-    match wind {
-        Wind::East => Honor::East,
-        Wind::South => Honor::South,
-        Wind::West => Honor::West,
-        Wind::North => Honor::North,
-    }
-}
 
 pub fn is_ryanmen_wait(shuntsu_tiles: &[Tile], winning_tile: &Tile) -> bool {
     if shuntsu_tiles[0] == *winning_tile {
@@ -528,13 +544,12 @@ pub fn has_shuntsu(result: &[Mentsu], first_tile: Tile) -> bool {
 
 pub fn has_koutsu_or_kan(result: &[Mentsu], first_tile: Tile) -> bool{
     result.iter().any(|mentsu|{
-        if let Mentsu::Koutsu(tiles, _) 
-            | Mentsu::Ankan(tiles) 
+        match mentsu {
+            Mentsu::Koutsu(tiles, _) => tiles[0] == first_tile,
+            Mentsu::Ankan(tiles) 
             | Mentsu::Daiminkan(tiles)
-            | Mentsu::Shouminkan(tiles)  = mentsu {
-            tiles[0] == first_tile 
-        } else {
-            false
+            | Mentsu::Shouminkan(tiles) => tiles[0] == first_tile,
+            _ => false
         }
     })
 }
@@ -638,12 +653,7 @@ pub fn can_declare_ron(
     let mut combined_hand = hand.to_owned();
     combined_hand.push(*discard_tile);
     for mentsu in open_mentsu {
-        match mentsu {
-            Mentsu::Koutsu(tiles, _) | Mentsu::Shuntsu(tiles, _)
-            | Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles)
-            | Mentsu::Shouminkan(tiles) => combined_hand.extend(tiles),
-            _ => {}
-        }
+        combined_hand.extend(mentsu.tiles());
     }
     combined_hand.sort();
 
@@ -715,12 +725,7 @@ pub fn can_declare_tsumo(
     let mut combined_hand = hand.to_owned();
     combined_hand.push(*drawn_tile);
     for mentsu in open_mentsu {
-        match mentsu {
-            Mentsu::Koutsu(tiles, _) | Mentsu::Shuntsu(tiles, _)
-            | Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles)
-            | Mentsu::Shouminkan(tiles) => combined_hand.extend(tiles),
-            _ => {}
-        }
+        combined_hand.extend(mentsu.tiles());
     }
     combined_hand.sort();
 

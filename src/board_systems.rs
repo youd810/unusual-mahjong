@@ -892,7 +892,7 @@ pub fn declare_pon(
             && can_declare_pon(&hand.0 ,&message.tile) { 
                 lock.0 = true;
 
-                open_mentsu.0.push(Mentsu::Koutsu(vec![message.tile; 3], false));
+                open_mentsu.0.push(Mentsu::Koutsu([message.tile; 3], false));
                 println!("{} declares Pon on {:?}", message.player, message.tile);
                 for _ in 0..2 {
                     let idx = hand.0.iter().position(|x| *x == message.tile).unwrap();
@@ -981,7 +981,7 @@ pub fn declare_chi(
                         // use the variables as a pointer for removal first b4 moving the value 
                         hand.remove_tile_from_hand(&next);
                         hand.remove_tile_from_hand(&prev);
-                        open_mentsu.0.push(Mentsu::Shuntsu(vec![prev, *tile, next], false));   
+                        open_mentsu.0.push(Mentsu::Shuntsu([prev, *tile, next], false));   
                         commands.entity(message.player).insert(ForbiddenDiscard(vec![*tile]));                   
                     },
                     ChiTilePos::Left => {
@@ -1003,7 +1003,7 @@ pub fn declare_chi(
 
                         hand.remove_tile_from_hand(&next);
                         hand.remove_tile_from_hand(&next_next);
-                        open_mentsu.0.push(Mentsu::Shuntsu(vec![*tile, next, next_next], false));
+                        open_mentsu.0.push(Mentsu::Shuntsu([*tile, next, next_next], false));
                         
                     },
                     ChiTilePos::Right => {
@@ -1025,7 +1025,7 @@ pub fn declare_chi(
 
                         hand.remove_tile_from_hand(&prev);
                         hand.remove_tile_from_hand(&prev_prev);
-                        open_mentsu.0.push(Mentsu::Shuntsu(vec![prev_prev, prev, *tile], false));
+                        open_mentsu.0.push(Mentsu::Shuntsu([prev_prev, prev, *tile], false));
                     },
             }
             
@@ -1166,7 +1166,7 @@ pub fn declare_kan(
 
 
             if message.is_discard && count == 3 {
-                open_mentsu.0.push(Mentsu::Daiminkan(vec![*tile; 4]));
+                open_mentsu.0.push(Mentsu::Daiminkan([*tile; 4]));
                 hand.0.retain(|x| x != tile);
                 commands.entity(tile_query.single().unwrap()).despawn(); 
                 commands.entity(message.player).remove::<ClosedHand>(); 
@@ -1176,7 +1176,7 @@ pub fn declare_kan(
             } 
 
             else if !message.is_discard && count == 4 {
-                open_mentsu.0.push(Mentsu::Ankan(vec![*tile; 4]));
+                open_mentsu.0.push(Mentsu::Ankan([*tile; 4]));
                 // dora flipping timing 
                 let new_dora = dead_wall.filler_tiles.remove(0);
                 let new_ura =  dead_wall.filler_tiles.remove(0);
@@ -1191,7 +1191,7 @@ pub fn declare_kan(
                 for mentsu in &mut open_mentsu.0 {
                     if let Mentsu::Koutsu(tiles, false) = mentsu && tiles[0] == *tile {
                         // deref to mutate
-                        *mentsu = Mentsu::Shouminkan(vec![*tile; 4]);
+                        *mentsu = Mentsu::Shouminkan([*tile; 4]);
                         hand.0.retain(|x| x != tile);
                         kan_successful_type = Some(Kantsu::Shouminkan);
                         game.pending_kan_dora = true;
@@ -1470,10 +1470,11 @@ pub fn auto_advance_call_window(
     tile_query: Query<(Entity, &DiscardedTile), With<CurrentDiscard>>,
     furiten_check: Query<(Entity, &Tenpai)>,
     mut commands: Commands,
+    result: Option<Res<RoundResult>>,
     lock: Res<CallLock>,
 ) {
     // wait for human input
-    if !human_options.is_empty() || lock.0 {
+    if !human_options.is_empty() || lock.0 || result.is_some() {
         return;
     }
 

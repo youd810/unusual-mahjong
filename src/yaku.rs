@@ -67,31 +67,27 @@ pub fn ryanpeikou(result: &[Mentsu]) -> bool {
 
 pub fn yakuhai(result: &[Mentsu], jikaze: &Wind, bakaze: &Wind) -> u8 {
     result.iter().map(|mentsu| {
-        if let
-            Mentsu::Koutsu(tiles, _)
-                | Mentsu::Ankan(tiles)
-                | Mentsu::Daiminkan(tiles)
-                | Mentsu::Shouminkan(tiles) = mentsu
-        {
-            let tile = &tiles[0];
-            let mut count = 0;
-            
-            if let Tile::Honor(Honor::Red | Honor::Green | Honor::White) = tile {
-                count += 1;
-            } 
+        let tile = match mentsu {
+            Mentsu::Koutsu(tiles, _) => &tiles[0],
+            Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles) | Mentsu::Shouminkan(tiles) => &tiles[0],
+            _ => return 0,
+        };
 
-            if let Tile::Honor(h) = tile {
-                if *h == wind_to_honor(jikaze) { 
-                    count += 1; 
-                }
-                if *h == wind_to_honor(bakaze) { 
-                    count += 1; 
-                }
+        let mut count = 0;
+        
+        if let Tile::Honor(Honor::Red | Honor::Green | Honor::White) = tile {
+            count += 1;
+        } 
+
+        if let Tile::Honor(h) = tile {
+            if *h == jikaze.wind_to_honor() { 
+                count += 1; 
             }
-            count
-        } else {
-            0
+            if *h == bakaze.wind_to_honor() { 
+                count += 1; 
+            }
         }
+        count
     }).sum()
 }
 
@@ -100,13 +96,15 @@ pub fn sanankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool, thirteen
     result
         .iter()
         .filter(|mentsu| {
-            if let Mentsu::Koutsu(tiles, true) | Mentsu::Ankan(tiles) = mentsu {
-                // compares result with thirteen tiles to see if the winning tile forms the final koutsu and doesn't come from ron 
-                // this check should suffice, or shouldn't it?
-                !(tiles[0] == *winning_tile && !is_tsumo && thirteen_tiles.iter().filter(|x| *x == winning_tile).count() == 2)
-            } else {
-                false
-            }
+            let tile = match mentsu {
+                Mentsu::Koutsu(tiles, true) => tiles[0],
+                Mentsu::Ankan(tiles) => tiles[0],
+                _ => return false,
+            };
+            
+            // compares result with thirteen tiles to see if the winning tile forms the final koutsu and doesn't come from ron 
+            // this check should suffice, or shouldn't it?
+            !(tile == *winning_tile && !is_tsumo && thirteen_tiles.iter().filter(|x| *x == winning_tile).count() == 2)
         }).count() == 3
 }
 
@@ -115,11 +113,12 @@ pub fn suuankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool) -> bool 
     result
         .iter()
         .filter(|mentsu|{
-            if let Mentsu::Koutsu(tiles, true) | Mentsu::Ankan(tiles) = mentsu {
-                tiles[0] != *winning_tile || is_tsumo
-            } else {
-                false
-            }
+            let tile = match mentsu {
+                Mentsu::Koutsu(tiles, true) => tiles[0],
+                Mentsu::Ankan(tiles) => tiles[0],
+                _ => return false,
+            };
+            tile != *winning_tile || is_tsumo
         }).count() == 4 
 }
 
@@ -195,11 +194,9 @@ pub fn chanta(result: &[Mentsu]) -> bool {
             Mentsu::Shuntsu(tiles, _) => {
                 is_terminal(&tiles[0]) || is_terminal(&tiles[2])
             }
-            Mentsu::Koutsu(tiles, _)  
-                | Mentsu::Jantou(tiles) 
-                | Mentsu::Ankan(tiles)  
-                | Mentsu::Daiminkan(tiles) 
-                | Mentsu::Shouminkan(tiles)  => {
+            Mentsu::Koutsu(tiles, _) => is_yaochuuhai(&tiles[0]),
+            Mentsu::Jantou(tiles) => is_yaochuuhai(&tiles[0]),
+            Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles) | Mentsu::Shouminkan(tiles) => {
                 is_yaochuuhai(&tiles[0])
             }
         }
@@ -213,11 +210,9 @@ pub fn junchan(result: &[Mentsu]) -> bool {
             Mentsu::Shuntsu(tiles, _) => {
                 is_terminal(&tiles[0]) || is_terminal(&tiles[2])
             }
-            Mentsu::Koutsu(tiles, _)  
-                | Mentsu::Jantou(tiles) 
-                | Mentsu::Ankan(tiles)  
-                | Mentsu::Daiminkan(tiles) 
-                | Mentsu::Shouminkan(tiles)  => {
+            Mentsu::Koutsu(tiles, _) => is_terminal(&tiles[0]),
+            Mentsu::Jantou(tiles) => is_terminal(&tiles[0]),
+            Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles) | Mentsu::Shouminkan(tiles) => {
                 is_terminal(&tiles[0])
             }
         }
@@ -345,8 +340,8 @@ pub fn pinfu(result: &[Mentsu], winning_tile: &Tile, jikaze: &Wind, bakaze: &Win
             Mentsu::Jantou(tiles) => {
                 has_valid_jantou = match tiles[0] {
                     Tile::Honor(Honor::Red | Honor::Green | Honor::White) => false,
-                    Tile::Honor(h) if h == wind_to_honor(jikaze) => false,
-                    Tile::Honor(h) if h == wind_to_honor(bakaze) => false,
+                    Tile::Honor(h) if h == jikaze.wind_to_honor() => false,
+                    Tile::Honor(h) if h == bakaze.wind_to_honor() => false,
                     _ => true,
                 };
             }
