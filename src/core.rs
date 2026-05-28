@@ -1,8 +1,10 @@
+use bevy::prelude::Entity;
+
 use crate::components::*;
-use crate::core::Honor::Red;
 use crate::yaku::*;
 use crate::scoring::*;
 use crate::resources::*;
+use crate::messages::*;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub enum Tile {
@@ -768,6 +770,137 @@ pub fn can_declare_tsumo(
         Some(yaku_result)
     }
 
+}
+
+
+pub fn best_potential_result(
+    hand: &[Tile],
+    open_mentsu: &[Mentsu],
+    tenpai: Option<&Tenpai>,
+    is_closed: bool,
+    is_oya: bool,
+    kawa: &Kawa,
+    is_riichi: bool,
+    is_double_riichi: bool,
+    is_ippatsu: bool,
+    bakaze: &Wind,
+    jikaze: &Wind,
+    wall: &Wall,
+    dead_wall: &DeadWall,
+    calls_made: bool,
+    visible_tiles: &[u8; 34],
+) -> Option<HandResult> {
+    let mut best: Option<HandResult> = None;
+
+    let mut full_visible = *visible_tiles;
+    for tile in hand {
+        full_visible[tile_to_index(tile)] += 1;
+    }
+    for mentsu in open_mentsu {
+        for tile in mentsu.tiles() {
+            full_visible[tile_to_index(tile)] += 1;
+        }
+    }
+
+    if let Some(tenpai) = tenpai {
+        for tile in &tenpai.0 {
+            if full_visible[tile_to_index(tile)] >= 4 { continue; }
+            if let Some(result) = can_declare_tsumo(
+                tile, hand, open_mentsu, tenpai,
+                is_closed, is_oya, kawa,
+                is_riichi, is_double_riichi, is_ippatsu,
+                bakaze, jikaze, wall, dead_wall,
+                false, calls_made,
+            ) 
+            && best.as_ref().is_none_or(|b| is_better(&result, b)) {
+                best = Some(result);
+            }
+        }
+    } else {
+        let open_vec = open_mentsu.to_vec();
+        let combined = combine_tiles(hand, &open_vec);
+        let mut freq = tiles_to_frequency_array(&combined);
+        let shanten = calculate_shanten_from_array(&mut freq);
+
+        if shanten != 1 { return None; }
+
+        let advancing = ukeire_tiles(&mut freq, 1);
+
+        for tile_idx in advancing {
+            if full_visible[tile_idx] >= 4 { continue; }
+
+            let incoming = index_to_tile(tile_idx);
+            let mut expanded = hand.to_vec();
+            expanded.push(incoming);
+            expanded.sort();
+
+            let mut seen_discards = vec![];
+            for d in 0..expanded.len() {
+                let discard = expanded[d];
+                if seen_discards.contains(&discard) { continue; }
+                seen_discards.push(discard);
+
+                let mut after_discard = expanded.clone();
+                after_discard.remove(d);
+
+                let waits = check_tenpai(&after_discard);
+                if waits.is_empty() { continue; }
+
+                let temp_tenpai = Tenpai(waits);
+
+                for wait in &temp_tenpai.0 {
+                    if full_visible[tile_to_index(wait)] >= 4 { continue; }
+                    if let Some(result) = can_declare_tsumo(
+                        wait, &after_discard, open_mentsu, &temp_tenpai,
+                        is_closed, is_oya, kawa,
+                        is_riichi, is_double_riichi, is_ippatsu,
+                        bakaze, jikaze, wall, dead_wall,
+                        false, calls_made,
+                    ) 
+                    && best.as_ref().is_none_or(|b| is_better(&result, b)) {
+                        best = Some(result);
+                    }
+                }
+            }
+        }
+    }
+
+    best
+}
+
+
+pub fn build_loser_tilt_info(
+    player: Entity,
+    hand: &Hand,
+    open_mentsu: &OpenMentsu,
+    tenpai: Option<&Tenpai>,
+    kawa: &Kawa,
+    jikaze: &Jikaze,
+    is_closed: bool,
+    is_oya: bool,
+    is_riichi: bool,
+    is_double_riichi: bool,
+    is_ippatsu: bool,
+    bakaze: &Wind,
+    wall: &Wall,
+    dead_wall: &DeadWall,
+    calls_made: bool,
+    visible_tiles: &[u8; 34],
+) -> LoserTiltInfo {
+    let best = best_potential_result(
+        &hand.0, &open_mentsu.0, tenpai,
+        is_closed, is_oya, kawa,
+        is_riichi, is_double_riichi, is_ippatsu,
+        bakaze, &jikaze.0, wall, dead_wall,
+        calls_made, visible_tiles,
+    );
+
+    LoserTiltInfo {
+        player,
+        was_tenpai: tenpai.is_some(),
+        was_riichi: is_riichi,
+        best_han: best.map(|r| r.total_han),
+    }
 }
 
 

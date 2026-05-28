@@ -88,6 +88,8 @@ pub fn resolve_accusation(
     pre_blackout: Res<PreBlackoutState>,
     mut revolver: ResMut<Revolver>,
     mut next_state: ResMut<NextState<TurnState>>,
+    mut eliminated_writer: MessageWriter<PlayerEliminatedMessage>,
+    mut survived_writer: MessageWriter<SurvivedShotMessage>,
     mut commands: Commands,
 ) {
     let Some(message) = messages.read().next() else { return };
@@ -95,7 +97,7 @@ pub fn resolve_accusation(
     let suspect_cheated = cheat_log.0.iter()
         .any(|entry| entry.cheater == message.suspect);
 
-    let (_, target) = if suspect_cheated {
+    let (shooter, target) = if suspect_cheated {
         println!("{} correctly accused {}!", message.accuser, message.suspect);
         (message.accuser, message.suspect)
     } else {
@@ -107,6 +109,12 @@ pub fn resolve_accusation(
 
     if revolver.pull() {
         println!("BANG! {} is eliminated!", target);
+
+        eliminated_writer.write(PlayerEliminatedMessage {
+            victim: target,
+            shooter,
+        });
+
         commands.entity(target).remove::<Alive>();
         commands.entity(target).remove::<Hand>();
         commands.entity(target).remove::<OpenMentsu>();
@@ -130,6 +138,11 @@ pub fn resolve_accusation(
         }
     } else {
         println!("*click* {} survives.", target);
+
+        survived_writer.write(SurvivedShotMessage {
+            survivor: target,
+            shooter,
+        });
     }
 
     let return_state = pre_blackout.0.clone();
@@ -275,6 +288,85 @@ pub fn process_shot_queue(
 }
 
 
+pub fn bot_tilt_system(
+    mut ron_messages: MessageReader<RonDealtMessage>,
+    mut tsumo_messages: MessageReader<TsumoDealtMessage>,
+    mut eliminated_messages: MessageReader<PlayerEliminatedMessage>,
+    mut survived_messages: MessageReader<SurvivedShotMessage>,
+    mut bot_query: Query<(Entity, &mut BotProfile), With<Alive>>,
+) {
+    // ron
+    for ron in ron_messages.read() {
+        if let Ok((player, mut profile)) = bot_query.get_mut(ron.loser.player) {
+            let mut tilt = 0.15;
+
+            if ron.is_yakuman { tilt += 0.25; }
+            if ron.loser.was_riichi { tilt += 0.10; }
+            if ron.loser.was_tenpai { tilt += 0.08; }
+
+            if let Some(best_han) = ron.loser.best_han && best_han > ron.winning_han { 
+                tilt += 0.10; 
+            }
+
+            let damage = tilt * (1.0 - profile.emotional_invulnerability);
+            profile.composure = (profile.composure - damage).max(0.2);
+
+            println!("Tilt: Bot {:?} took {:.2} composure damage from Ron. (now {:.2})",
+                player, damage, profile.composure);
+        }
+    }
+
+    // tsumo
+    for tsumo in tsumo_messages.read() {
+        for loser in &tsumo.losers {
+            if let Ok((player, mut profile)) = bot_query.get_mut(loser.player) {
+                let mut tilt = 0.08;
+
+                if tsumo.is_yakuman { tilt += 0.25; }
+                if loser.was_riichi { tilt += 0.10; }
+                if loser.was_tenpai { tilt += 0.08; }
+
+                if let Some(best_han) = loser.best_han && best_han > tsumo.winning_han { 
+                    tilt += 0.10; 
+                }
+
+                let damage = tilt * (1.0 - profile.emotional_invulnerability);
+                profile.composure = (profile.composure - damage).max(0.2);
+
+                println!("Tilt: Bot {:?} took {:.2} composure damage from Tsumo. (now {:.2})",
+                    player, damage, profile.composure);
+            }
+        }
+    }
+
+    // witnessing elimination
+    for elim in eliminated_messages.read() {
+        for (bot_entity, mut profile) in bot_query.iter_mut() {
+            // Shooter doesn't care. Victim is dead.
+            if bot_entity != elim.shooter && bot_entity != elim.victim {
+                let tilt = 0.25;
+                let damage = tilt * (1.0 - profile.emotional_invulnerability);
+                profile.composure = (profile.composure - damage).max(0.2);
+
+                println!("Tilt: Bot {:?} took {:.2} composure damage from witnessing elimination. (now {:.2})",
+                    bot_entity, damage, profile.composure);
+            }
+        }
+    }
+
+    // surviving a shot
+    for surv in survived_messages.read() {
+        if let Ok((player, mut profile)) = bot_query.get_mut(surv.survivor) {
+            let tilt = 0.35;
+            let damage = tilt * (1.0 - profile.emotional_invulnerability);
+            profile.composure = (profile.composure - damage).max(0.2);
+
+            println!("Tilt: Bot {:?} took {:.2} composure damage from surviving a shot. (now {:.2})",
+                player, damage, profile.composure);
+        }
+    }
+}
+
 
 pub fn check_ryuukyoku(
     oya_tenpai_query: Single<Has<Tenpai>, With<Oya>>,
@@ -366,9 +458,17 @@ pub fn declare_ron(
     oya_query: Query<Has<Oya>>,
     jikaze_query: Query<&Jikaze>,
     mut points_query: Query<&mut Points>,
+    loser_query: Query<(
+        &Hand, &OpenMentsu, Option<&Tenpai>, &Kawa, &Jikaze,
+        Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>,
+    )>,
+    visible_query: Query<(Entity, &Kawa, &OpenMentsu)>,
     mut game: ResMut<GameState>,
+    wall: Res<Wall>,
+    dead_wall: Res<DeadWall>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
+    mut ron_writer: MessageWriter<RonDealtMessage>,
     mut commands: Commands,
 ) {
     // TODO: consider the possibility of ai not declaring a ron
@@ -385,11 +485,11 @@ pub fn declare_ron(
     let player_count = alive_check.iter().count();
 
     // sanchahou
-    if winners.len() == (player_count - 1)  && player_count > 2 {
+    if winners.len() == (player_count - 1) && player_count > 2 {
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
         commands.insert_resource(RoundOutcome {
-            winners: vec![],  
-            loser: Some(winners[0].1.discarded_by),             
+            winners: vec![],
+            loser: Some(winners[0].1.discarded_by),
             is_tsumo: false,
             tochuu_causer: winners.iter().map(|(e, _, _)| *e).collect(),
         });
@@ -397,12 +497,36 @@ pub fn declare_ron(
         return;
     }
 
+    let loser = winners[0].1.discarded_by;
+
+    // build visible tiles from loser's perspective
+    let mut visible_tiles = [0u8; 34];
+    for (entity, kawa, open) in visible_query.iter() {
+        for tile in &kawa.0 {
+            visible_tiles[tile_to_index(tile)] += 1;
+        }
+        if entity != loser {
+            for mentsu in &open.0 {
+                for tile in mentsu.tiles() {
+                    visible_tiles[tile_to_index(tile)] += 1;
+                }
+            }
+        }
+    }
+    for tile in &dead_wall.dora_indicators {
+        visible_tiles[tile_to_index(tile)] += 1;
+    }
+
     let mut any_oya_won = false;
     let mut ron_winners = vec![];
+    let mut best_winning_han = 0u8;
+    let mut best_is_yakuman = false;
+    let mut best_winner = Entity::PLACEHOLDER;
+
     for (winner, ron_option, _) in &winners {
         let is_oya = oya_query.get(*winner).unwrap_or(false);
-        if is_oya { 
-            any_oya_won = true; 
+        if is_oya {
+            any_oya_won = true;
         }
 
         let score = calculate_score(
@@ -422,6 +546,12 @@ pub fn declare_ron(
             loser_pts.0 -= final_payout;
         }
 
+        if ron_option.result.total_han > best_winning_han || ron_option.result.is_yakuman {
+            best_winning_han = ron_option.result.total_han;
+            best_is_yakuman = ron_option.result.is_yakuman;
+            best_winner = *winner;
+        }
+
         ron_winners.push((*winner, ron_option.result.to_owned(), score.total_won));
 
         println!("{} declares Ron on {}! {:?} - {}han {}fu - {} points",
@@ -431,14 +561,32 @@ pub fn declare_ron(
         );
     }
 
-    commands.insert_resource(RoundOutcome{
-        winners: ron_winners,  
-        loser: Some(winners[0].1.discarded_by),       
+    // sends tilt message
+    if let Ok((hand, open, tenpai, kawa, jikaze,
+              is_closed, is_oya, is_riichi, is_ippatsu, is_double)) = loser_query.get(loser)
+    {
+        let loser_tilt = build_loser_tilt_info(
+            loser, hand, open, tenpai, kawa, jikaze,
+            is_closed, is_oya, is_riichi, is_double, is_ippatsu,
+            &game.bakaze, &*wall, &*dead_wall, game.calls_made, &visible_tiles,
+        );
+
+        ron_writer.write(RonDealtMessage {
+            winner: best_winner,
+            winning_han: best_winning_han,
+            is_yakuman: best_is_yakuman,
+            loser: loser_tilt,
+        });
+    }
+
+    commands.insert_resource(RoundOutcome {
+        winners: ron_winners,
+        loser: Some(loser),
         is_tsumo: false,
         tochuu_causer: vec![],
     });
 
-    // riichi sticks go to closest winner (sorted first)
+    // riichi sticks go to closest winner
     let discarder = winners[0].1.discarded_by;
     if let Ok(discarder_jikaze) = jikaze_query.get(discarder) {
         winners.sort_by_key(|(_, _, jikaze)| jikaze.0.distance_to(&discarder_jikaze.0));
@@ -450,7 +598,6 @@ pub fn declare_ron(
         game.riichi_points = 0;
     }
 
- 
     if any_oya_won {
         commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
     } else {
@@ -488,8 +635,6 @@ pub fn cleanup_call_options(
         commands.entity(entity).despawn();
     }
 }
-
-
 
 
 // refer to ron counterpart
@@ -533,8 +678,16 @@ pub fn declare_tsumo(
     oya_query: Query<Has<Oya>>,
     mut points_query: Query<(Entity, &mut Points, Has<Oya>), With<Alive>>,
     alive_check: Query<(), With<Alive>>,
+    loser_info_query: Query<(
+        Entity, &Hand, &OpenMentsu, Option<&Tenpai>, &Kawa, &Jikaze,
+        Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>,
+    ), With<Alive>>,
+    visible_query: Query<(Entity, &Kawa, &OpenMentsu)>,
+    wall: Res<Wall>,
+    dead_wall: Res<DeadWall>,
     mut game: ResMut<GameState>,
     mut next_state: ResMut<NextState<TurnState>>,
+    mut tsumo_writer: MessageWriter<TsumoDealtMessage>,
     mut commands: Commands,
 ) {
     // yeah these should be a simple if let check instead of a for loop 
@@ -561,7 +714,7 @@ pub fn declare_tsumo(
                     player_points.0 -= game.honba as i32 * 100;
                 } else {
                     player_points.0 -= score.non_oya_pays as i32;
-                   player_points.0 -= game.honba as i32 * 100;
+                    player_points.0 -= game.honba as i32 * 100;
                 }
             } else {
                 player_points.0 += score.total_won as i32;
@@ -571,15 +724,53 @@ pub fn declare_tsumo(
             }
         }
 
+        // build tilt info for each loser
+        let mut losers = vec![];
+        for (entity, hand, open, tenpai, kawa, jikaze,
+             is_closed, is_oya_l, is_riichi, is_ippatsu, is_double) in loser_info_query.iter()
+        {
+            if entity == message.player { continue; }
+
+            let mut visible_tiles = [0u8; 34];
+            for (vis_entity, vis_kawa, vis_open) in visible_query.iter() {
+                for tile in &vis_kawa.0 {
+                    visible_tiles[tile_to_index(tile)] += 1;
+                }
+                if vis_entity != entity {
+                    for mentsu in &vis_open.0 {
+                        for tile in mentsu.tiles() {
+                            visible_tiles[tile_to_index(tile)] += 1;
+                        }
+                    }
+                }
+            }
+            for tile in &dead_wall.dora_indicators {
+                visible_tiles[tile_to_index(tile)] += 1;
+            }
+
+            losers.push(build_loser_tilt_info(
+                entity, hand, open, tenpai, kawa, jikaze,
+                is_closed, is_oya_l, is_riichi, is_double, is_ippatsu,
+                &game.bakaze, &*wall, &*dead_wall, game.calls_made, &visible_tiles,
+            ));
+        }
+
+        tsumo_writer.write(TsumoDealtMessage {
+            winner: message.player,
+            winning_han: message.result.total_han,
+            is_yakuman: message.result.is_yakuman,
+            losers,
+        });
+
         println!("{} declares Tsumo! {:?} - {}han {}fu - {} points",
             message.player, message.result.yaku_names,
             message.result.total_han, message.result.total_fu,
             score.total_won
         );
 
-        commands.insert_resource(RoundOutcome{
-            winners: vec![(message.player, message.result.to_owned(), score.total_won)],  
-            loser: None,       
+        commands.insert_resource(RoundOutcome {
+            winners: vec![(message.player, message.result.to_owned(), score.total_won)],
+            loser: None,
             is_tsumo: true,
             tochuu_causer: vec![],
         });
@@ -748,7 +939,7 @@ pub fn suukaikan(
     let (players_with_kan, total_kan) = player_and_total_kan_count(&query);
 
     if total_kan >= 4 && players_with_kan > 1 {
-        println!("Suukaikan! {} kans across {} players", total_kan, players_with_kan);
+        println!("Suukaikan! {} kan across {} players", total_kan, players_with_kan);
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
         commands.insert_resource(RoundOutcome {
                     winners: vec![],  

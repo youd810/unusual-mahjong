@@ -45,6 +45,10 @@ fn main() {
         .add_message::<DeclareTsumoMessage>()
         .add_message::<DeclareKyuushuMessage>()
         .add_message::<AccuseCheatMessage>()
+        .add_message::<RonDealtMessage>()
+        .add_message::<TsumoDealtMessage>()
+        .add_message::<PlayerEliminatedMessage>()
+        .add_message::<SurvivedShotMessage>()
         // setup (first round)
         .add_systems(OnEnter(TurnState::Setup), (
             start_game,
@@ -158,6 +162,8 @@ fn main() {
         .add_systems(OnEnter(ExecutionSubState::Processing), process_shot_queue)
         // shooting ui
         .add_systems(EguiPrimaryContextPass, target_selection_ui_system.run_if(in_state(ExecutionSubState::SelectTargets)))
+        // tilt
+        .add_systems(Update, bot_tilt_system)
         .run();
     
 }

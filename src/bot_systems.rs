@@ -11,7 +11,7 @@ use crate::messages::*;
 pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
     query: Query<(Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, &BotProfile, Has<RiichiSelecting>), Without<HumanPlayer>>,
-    visible_query: Query<(&OpenMentsu, &Kawa, Has<Riichi>)>,
+    visible_query: Query<(Entity, &OpenMentsu, &Kawa, Has<Riichi>)>,
     dead_wall: Res<DeadWall>,
     mut messages: MessageWriter<DiscardTileMessage>,
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
@@ -29,10 +29,10 @@ pub fn bot_discard_system(
         let mut rng = rand::rng();
 
         // using composure as a stat penalty
-        let effective_read = (profile.read * profile.composure).max(profile.read - 0.3);
-        let effective_aggressiveness = (profile.aggressiveness * profile.composure).max(profile.aggressiveness - 0.3);
+        let effective_read = ((profile.read * profile.composure).max(profile.read - 0.3)).max(0.1);
+        let effective_aggressiveness = ((profile.aggressiveness * profile.composure).max(profile.aggressiveness - 0.3)).max(0.1);
 
-        for (open, kawa, is_riichi) in visible_query.iter() {
+        for (entity, open, kawa, is_riichi) in visible_query.iter() {
             if is_riichi || open.0.len() >= 3 {
                 is_threat = true;
                 for tile in kawa.0.iter() {
@@ -42,11 +42,15 @@ pub fn bot_discard_system(
                 }
             }
 
-            for mentsu in open.0.iter() {
-                for tile in mentsu.tiles() {
-                    visible_tiles[tile_to_index(tile)] += 1;
+            // skip own open mentsu (calculated in `evaluate_discard`)
+            if entity != player {
+                for mentsu in open.0.iter() {
+                    for tile in mentsu.tiles() {
+                        visible_tiles[tile_to_index(tile)] += 1;
+                    }
                 }
             }
+
             for tile in kawa.0.iter() {
                 visible_tiles[tile_to_index(tile)] += 1;
             }
@@ -218,7 +222,7 @@ pub fn bot_cheat_decision_system(
 pub fn bot_cheat_execution_system(
     mut query: Query<(Entity, &mut Hand, &OpenMentsu, Option<&mut DrawnTile>, &BotCheatIntent, Has<Riichi>), Without<HumanPlayer>>,
     mut kawa_query: Query<(Entity, &mut Kawa)>,
-    open_query: Query<&OpenMentsu>,
+    open_query: Query<(Entity, &OpenMentsu)>,
     dead_wall: Res<DeadWall>,
     timer: Res<BlackoutTimer>,
     mut cheat_log: ResMut<CheatLog>,
@@ -245,7 +249,8 @@ pub fn bot_cheat_execution_system(
         for (_, kawa) in kawa_query.iter() {
             for tile in &kawa.0 { visible_tiles[tile_to_index(tile)] += 1; }
         }
-        for open in open_query.iter() {
+        for (entity, open) in open_query.iter() {
+            if entity == bot_entity { continue; }
             for mentsu in &open.0 {
                 for tile in mentsu.tiles() { visible_tiles[tile_to_index(tile)] += 1; }
             }

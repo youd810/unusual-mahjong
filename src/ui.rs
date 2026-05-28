@@ -354,7 +354,15 @@ pub fn round_end_ui_system(
                     if summary.is_tsumo { "Tsumo" } else { "Ron" }));
 
                 if result.is_yakuman {
-                    ui.label("YAKUMAN!!!");
+                    let count = match result.yaku_names.len() {
+                        2 => "DOUBLE ",
+                        3 => "TRIPLE ",
+                        4 => "QUADRUPLE ",
+                        5 => "QUINTUPLE ",
+                        6 => "SEXTUPLE ",
+                        _ => "",
+                    };
+                    ui.label(format!("{}YAKUMAN!!!", count));
                 }
 
                 for yaku in &result.yaku_names {
