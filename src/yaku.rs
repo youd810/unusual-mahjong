@@ -220,6 +220,12 @@ pub fn junchan(result: &[Mentsu]) -> bool {
 }
 
 
+pub fn ryankantsu(open_mentsu: &[Mentsu]) -> bool {
+    open_mentsu.iter().filter(|mentsu|
+        matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_))).count() == 2 
+}
+
+
 pub fn sankantsu(open_mentsu: &[Mentsu]) -> bool {
     open_mentsu.iter().filter(|mentsu|
         matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_))).count() == 3 

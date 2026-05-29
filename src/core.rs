@@ -478,11 +478,11 @@ pub fn check_open_yaku(combined_hand: &[Tile], jikaze: &Wind, bakaze: &Wind) -> 
 }
 
 
-pub fn combine_tiles(hand: &[Tile], open_mentsu: &Vec<Mentsu>) -> Vec<Tile> {
+pub fn combine_tiles(hand: &[Tile], open_mentsu: &[Mentsu]) -> Vec<Tile> {
     let mut result = hand.to_owned();
 
     for mentsu in open_mentsu{
-            result.extend(mentsu.tiles());
+        result.extend(mentsu.tiles());
     };
     result
 }

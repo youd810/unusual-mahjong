@@ -126,14 +126,19 @@ fn main() {
                 .or(in_state(TurnState::RinshanDraw))
             )
         )
-        .add_systems(Update, blackout_timer_system
-            .run_if(in_state(TurnState::Blackout)))
+        .add_systems(OnEnter(TurnState::Blackout), bot_cheat_decision_system)
+        .add_systems(Update, (
+            blackout_timer_system,
+            bot_cheat_execution_system,
+        ).run_if(in_state(TurnState::Blackout)))
         .add_systems(OnExit(TurnState::Blackout), cleanup_blackout) 
         // blackout ui 
         .add_systems(EguiPrimaryContextPass, blackout_ui_system
             .run_if(in_state(TurnState::Blackout)))
         // accusation window
+        .add_systems(OnEnter(TurnState::AccusationWindow), bot_accusation_decision_system)
         .add_systems(Update, (
+            bot_accusation_execution_system,
             resolve_accusation,
             accusation_window_system,
         ).chain()

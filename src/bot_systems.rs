@@ -208,12 +208,14 @@ pub fn bot_cheat_decision_system(
     let duration = timer.0.duration().as_secs_f32();
     let mut rng = rand::rng();
 
-    for (entity, profile) in &query {
-        let probability = profile.cheat_tendency * (duration / 5.0);
+    if duration >= 2.0 {
+        for (entity, profile) in &query {
+            let probability = profile.cheat_tendency * (duration / 5.0);
 
-        if rng.random::<f32>() < probability {
-            let execute_at = rng.random_range(1.0..=duration);
-            commands.entity(entity).insert(BotCheatIntent { execute_at });
+            if rng.random::<f32>() < probability {
+                let execute_at = rng.random_range(1.0..=duration);
+                commands.entity(entity).insert(BotCheatIntent { execute_at });
+            }
         }
     }
 }
@@ -422,7 +424,11 @@ pub fn bot_accusation_execution_system(
     let mut earliest: Option<(Entity, &BotAccusationIntent)> = None;
 
     for (entity, intent) in &query {
-        if elapsed >= intent.accuse_at && earliest.is_none() || intent.accuse_at < earliest.unwrap().1.accuse_at {
+        if elapsed < intent.accuse_at {
+            continue;
+        }
+
+        if earliest.is_none() || intent.accuse_at < earliest.unwrap().1.accuse_at {
             earliest = Some((entity, intent));
         }
     }

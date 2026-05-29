@@ -17,15 +17,15 @@ impl HandResult {
     pub fn shot_count_from_result(&self) -> u8 {
         if self.is_yakuman { return 3; }
         match self.total_han {
-            16..=21 => 1,    // haneman
-            22..=30 => 2,   // baiman
-            31..=36 => 2,  // sanbaiman
+            6..=7 => 1,    // haneman
+            8..=10 => 2,   // baiman
+            11..=12 => 2,  // sanbaiman
             _ => 0,
         }
     }
 
     pub fn is_low_han(&self) -> bool {
-        !self.is_yakuman && self.total_han < 6
+        !self.is_yakuman && self.total_han < 2
     }
 }
 
@@ -68,14 +68,14 @@ pub fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool)
         for dora in dead_wall.dora_indicators.iter() {
             if *tile == get_dora_from_indicator(dora) {
                 dora_count.dora += 1;
-                dora_count.additional_han += 2;
+                dora_count.additional_han += 1;
             }
         }
         if is_riichi {
             for ura in dead_wall.ura_indicators.iter() {
                 if *tile == get_dora_from_indicator(ura) {
                     dora_count.ura_dora += 1;
-                    dora_count.additional_han += 2 // ! testing 
+                    dora_count.additional_han += 1;
                 }
             }
         }
@@ -177,17 +177,15 @@ pub fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman
 
     // https://riichi.wiki/Japanese_mahjong_scoring_rules
     // vanilla: base = fu as u32 * 2_u32.pow((han + 2 ).into());
-    let float_base = fu as f32 * 2_f32.powf((han as f32 / 3.0) + 2.0); // ! consider double han for yaku and half for custom dora later
-    let mut base = float_base.round() as u32;
+    let mut base = fu as u32 * 2_u32.pow((han + 2 ).into()); 
 
-    // ! testing
-    if base > 2000 || han > 15 || (han >= 12 && fu >= 40) || (han >= 9 && fu >= 70) {
+    if base > 2000 || han > 5 || (han >= 4 && fu >= 40) || (han >= 3 && fu >= 70) {
         match han {
-            9..=15 => base = 2000,
-            16..=21 => base = 3000,
-            22..=30 => base = 4000,
-            31..=36 => base = 6000,
-            _ => base = 8000,
+            0..=5 => base = 2000,
+            6..=7 => base = 3000,
+            8..=10 => base = 4000,
+            11..=12 => base = 6000,
+            _ =>  base = 8000, // ? this is probably unnecessary
         }
     }
 
@@ -293,12 +291,11 @@ pub fn evaluate_yaku(
         }
     }
 
+    // TODO: add kazoe yakuman
     if !best.yaku_names.is_empty() && !best.is_yakuman {
-        // ! testing
         let dora_count = count_dora(combined_hand, dead_wall, is_riichi);
         best.dora_count = dora_count.dora;
         best.ura_dora_count = dora_count.ura_dora;
-        best.total_han *= 3;
         best.total_han += dora_count.additional_han;
     }
 
@@ -408,6 +405,14 @@ pub fn evaluate_standard(
         eval.total_han += if is_hand_closed { 2 } else { 1 };
     }
 
+    if sankantsu(open_mentsu) {
+        eval.yaku_names.push("Sankantsu".to_string());
+        eval.total_han += 2;
+    } else if ryankantsu(open_mentsu) { // ! custom yaku
+        eval.yaku_names.push("Ryankantsu".to_string());
+        eval.total_han += 1;
+    }
+
     if is_hand_closed {
         if ryanpeikou(result) {
             eval.yaku_names.push("Ryanpeikou".to_string());
@@ -454,10 +459,6 @@ pub fn evaluate_standard(
         eval.total_han += 2;
     }
 
-    if sankantsu(open_mentsu) {
-        eval.yaku_names.push("Sankantsu".to_string());
-        eval.total_han += 2;
-    }
 
     if is_hand_closed && pinfu(result, winning_tile, jikaze, bakaze) {
         eval.yaku_names.push("Pinfu".to_string());
