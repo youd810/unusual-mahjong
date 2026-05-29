@@ -159,11 +159,15 @@ fn main() {
         // shooting phase
         .add_sub_state::<ExecutionSubState>()
         .add_systems(OnEnter(ExecutionSubState::BuildQueue), build_shot_queue)
-        .add_systems(OnEnter(ExecutionSubState::Processing), process_shot_queue)
+        .add_systems(Update, process_shot_queue.run_if(in_state(ExecutionSubState::Processing)))
         // shooting ui
         .add_systems(EguiPrimaryContextPass, target_selection_ui_system.run_if(in_state(ExecutionSubState::SelectTargets)))
         // tilt
-        .add_systems(Update, bot_tilt_system)
+        .add_systems(Update, bot_tilt_system
+            .after(process_shot_queue)
+            .after(declare_ron)
+            .after(declare_tsumo)
+        )
         .run();
     
 }

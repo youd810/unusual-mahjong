@@ -383,6 +383,7 @@ pub fn evaluate_discard(
     visible_tiles: &[u8; 34],
     safe_tiles: &[Tile],
     should_defend: bool,
+    forbidden: Option<&[Tile]>,
 ) -> Tile {
     let mut safe_map = [0; 34];
     let mut has_safe_tiles = false;
@@ -399,11 +400,25 @@ pub fn evaluate_discard(
     let mut best_index = 0;
     let mut lowest_shanten = 8;
     let mut max_ukeire_count = 0;
+    let mut found_valid = false;
 
     for i in 0..34 {
-        if freq_array[i] == 0 || !hand_plus_drawn.contains(&index_to_tile(i)) || (has_safe_tiles && safe_map[i] == 0 && should_defend) {
+        let current_tile = index_to_tile(i);
+
+        if freq_array[i] == 0 || !hand_plus_drawn.contains(&current_tile) {
             continue;
         }
+
+        // ignores kuikae
+        if let Some(f) = forbidden && f.contains(&current_tile) { 
+            continue; 
+        }
+
+        if has_safe_tiles && safe_map[i] == 0 && should_defend {
+            continue;
+        }
+
+        found_valid = true;
 
         freq_array[i] -= 1;
         let shanten = calculate_shanten_from_array(&mut freq_array);
@@ -423,6 +438,17 @@ pub fn evaluate_discard(
 
         freq_array[i] += 1;
     }
+
+    // fallback if no valid after kuikae filter
+    if !found_valid {
+        for tile in hand_plus_drawn {
+            if let Some(f) = forbidden {
+                if f.contains(tile) { continue; }
+            }
+            return *tile;
+        }
+    }
+
     index_to_tile(best_index)
 }
 

@@ -225,13 +225,16 @@ pub fn build_shot_queue(
 
 
 pub fn process_shot_queue(
-    mut queue: ResMut<ExecuteQueue>,
+    mut queue_opt: Option<ResMut<ExecuteQueue>>,
     mut revolver: ResMut<Revolver>,
     human_query: Query<Has<HumanPlayer>>,
+    mut eliminated_writer: MessageWriter<PlayerEliminatedMessage>,
+    mut survived_writer: MessageWriter<SurvivedShotMessage>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
-    
+    let Some(mut queue) = queue_opt else { return };
+
     for shot in queue.0.drain(..) {
         let is_human = human_query.get(shot.target).unwrap_or(false);
         println!("{} shoots at {} (chamber {}/{})",
@@ -240,6 +243,11 @@ pub fn process_shot_queue(
         if revolver.pull() {
             println!("BANG! {} is eliminated!{}", shot.target,
                 if is_human { " (HUMAN)" } else { "" });
+
+            eliminated_writer.write(PlayerEliminatedMessage {
+                victim: shot.target,
+                shooter: shot.shooter,
+            });
 
             commands.entity(shot.target).remove::<Alive>();
             commands.entity(shot.target).remove::<Hand>();
@@ -252,17 +260,16 @@ pub fn process_shot_queue(
             commands.entity(shot.target).remove::<DoubleRiichi>();
             commands.entity(shot.target).remove::<Furiten>();
             commands.entity(shot.target).remove::<DrawnTile>();
-            commands.entity(shot.target).remove::<DoubleRiichi>();
-            commands.entity(shot.target).remove::<RonOption>();      
-            commands.entity(shot.target).remove::<RonDeclared>();     
-            commands.entity(shot.target).remove::<TsumoOption>();  
+            commands.entity(shot.target).remove::<RonOption>();
+            commands.entity(shot.target).remove::<RonDeclared>();
+            commands.entity(shot.target).remove::<TsumoOption>();
             commands.entity(shot.target).remove::<PonOption>();
             commands.entity(shot.target).remove::<ChiOption>();
             commands.entity(shot.target).remove::<DaiminkanOption>();
             commands.entity(shot.target).remove::<AnkanOption>();
             commands.entity(shot.target).remove::<ShouminkanOption>();
             commands.entity(shot.target).remove::<RiichiOption>();
-            commands.entity(shot.target).remove::<KyuushuOption>();  
+            commands.entity(shot.target).remove::<KyuushuOption>();
 
             if is_human {
                 println!("ゲーム終了\nYou died.");
@@ -273,11 +280,15 @@ pub fn process_shot_queue(
                 return;
             }
 
-            // one death per execution
             break;
         } else {
             println!("*click* \n{} survives. (chamber now {}/{})",
                 shot.target, revolver.chamber, revolver.bullet);
+
+            survived_writer.write(SurvivedShotMessage {
+                survivor: shot.target,
+                shooter: shot.shooter,
+            });
         }
     }
 
@@ -309,7 +320,7 @@ pub fn bot_tilt_system(
             }
 
             let damage = tilt * (1.0 - profile.emotional_invulnerability);
-            profile.composure = (profile.composure - damage).max(0.2);
+            profile.composure = (profile.composure - damage).max(0.1); 
 
             println!("Tilt: Bot {:?} took {:.2} composure damage from Ron. (now {:.2})",
                 player, damage, profile.composure);
@@ -342,7 +353,6 @@ pub fn bot_tilt_system(
     // witnessing elimination
     for elim in eliminated_messages.read() {
         for (bot_entity, mut profile) in bot_query.iter_mut() {
-            // Shooter doesn't care. Victim is dead.
             if bot_entity != elim.shooter && bot_entity != elim.victim {
                 let tilt = 0.25;
                 let damage = tilt * (1.0 - profile.emotional_invulnerability);
@@ -1466,6 +1476,8 @@ pub fn start_game(
 
         if i == 0 {
             player.insert(HumanPlayer);
+        } else {
+            player.insert(BotProfile::average());
         }
 
         if *wind == Wind::East {

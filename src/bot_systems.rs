@@ -10,14 +10,14 @@ use crate::messages::*;
 
 pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
-    query: Query<(Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, &BotProfile, Has<RiichiSelecting>), Without<HumanPlayer>>,
+    query: Query<(Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, &BotProfile, Has<RiichiSelecting>, Option<&ForbiddenDiscard>), Without<HumanPlayer>>,
     visible_query: Query<(Entity, &OpenMentsu, &Kawa, Has<Riichi>)>,
     dead_wall: Res<DeadWall>,
     mut messages: MessageWriter<DiscardTileMessage>,
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
     mut commands: Commands,
 ) {
-    if let Ok((player, maybe_drawn, hand, open_mentsu, profile, is_selecting)) = query.get(current_turn.0) {
+    if let Ok((player, maybe_drawn, hand, open_mentsu, profile, is_selecting, maybe_forbidden)) = query.get(current_turn.0) {
         let mut hand_plus_drawn = hand.0.to_owned();
         if let Some(drawn) = maybe_drawn {
             hand_plus_drawn.push(drawn.0);
@@ -50,7 +50,6 @@ pub fn bot_discard_system(
                     }
                 }
             }
-
             for tile in kawa.0.iter() {
                 visible_tiles[tile_to_index(tile)] += 1;
             }
@@ -67,11 +66,11 @@ pub fn bot_discard_system(
             let panic = rng.random::<f32>() > panic_threshold;
 
             let current_shanten = calculate_shanten(&combine_tiles(&hand_plus_drawn, &open_mentsu.0));
-
             should_defend = panic || current_shanten > 1;
         }
 
-        let discard = evaluate_discard(&hand_plus_drawn, &open_mentsu.0, &visible_tiles, &safe_tiles, should_defend);
+        let forbidden_slice = maybe_forbidden.map(|f| f.0.as_slice());
+        let discard = evaluate_discard(&hand_plus_drawn, &open_mentsu.0, &visible_tiles, &safe_tiles, should_defend, forbidden_slice);
 
         if is_selecting {
             riichi_writer.write(DeclareRiichiMessage { player, tile: discard });
