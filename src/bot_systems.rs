@@ -144,11 +144,54 @@ pub fn bot_call_system(
             } else if let Some(p) = pon {
                 pon_writer.write(DeclarePonMessage { player, tile: p.0 });  
             } else if let Some(c) = chi {
-                // TODO: just auto-picking the first valid chi position for now. more choice(s) later
+                let mut best_pos = c.positions[0];
+                let mut best_score = (i32::MIN, -1, -1);
+
+                for &pos in c.positions.iter() {
+                    let (t1, t2, shuntsu_array) = match pos {
+                        ChiTilePos::Left => {
+                            let next = next_tile_sequence(&c.tile).unwrap();
+                            let next_next = next_tile_sequence(&next).unwrap();
+                            (next, next_next, [c.tile, next, next_next])
+                        },
+                        ChiTilePos::Middle => {
+                            let prev = previous_tile_sequence(&c.tile).unwrap();
+                            let next = next_tile_sequence(&c.tile).unwrap();
+                            (prev, next,[prev, c.tile, next])
+                        },
+                        ChiTilePos::Right => {
+                            let prev = previous_tile_sequence(&c.tile).unwrap();
+                            let prev_prev = previous_tile_sequence(&prev).unwrap();
+                            (prev_prev, prev, [prev_prev, prev, c.tile])
+                        },
+                    };
+
+                    let mut temp_hand = Hand(hand.0.clone());
+                    temp_hand.remove_tile_from_hand(&t1);
+                    temp_hand.remove_tile_from_hand(&t2);
+
+                    let mut temp_open = open_mentsu.0.clone();
+                    temp_open.push(Mentsu::Shuntsu(shuntsu_array, false));
+
+                    let combined = combine_tiles(&temp_hand.0, &temp_open);
+                    let mut freq = tiles_to_frequency_array(&combined);
+                    let current_shanten = calculate_shanten_from_array(&mut freq);
+
+                    let current_ukeire = ukeire_tiles(&mut freq, current_shanten).len() as i32;
+                    let current_dora = count_dora(&combined, &*dead_wall, false).dora as i32;
+
+                    let current_score = (-current_shanten, current_ukeire, current_dora);
+
+                    if current_score > best_score {
+                        best_score = current_score;
+                        best_pos = pos;
+                    }
+                }
+
                 chi_writer.write(DeclareChiMessage {
                     player,
                     tile: c.tile,
-                    pos: c.positions[0],
+                    pos: best_pos,
                     discarded_by: discarded_by.0,
                 });
             }

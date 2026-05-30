@@ -1175,59 +1175,59 @@ pub fn declare_chi(
             let tile = &message.tile;
 
             match pos {
-                    ChiTilePos::Middle => {
-                        println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
-                        let next = next_tile_sequence(tile).unwrap();
-                        let prev = previous_tile_sequence(tile).unwrap();
-                        // use the variables as a pointer for removal first b4 moving the value 
-                        hand.remove_tile_from_hand(&next);
-                        hand.remove_tile_from_hand(&prev);
-                        open_mentsu.0.push(Mentsu::Shuntsu([prev, *tile, next], false));   
-                        commands.entity(message.player).insert(ForbiddenDiscard(vec![*tile]));                   
-                    },
-                    ChiTilePos::Left => {
-                        println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
-                        let next = next_tile_sequence(tile).unwrap();
-                        let next_next = next_tile_sequence(&next).unwrap();
+                ChiTilePos::Middle => {
+                    println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
+                    let next = next_tile_sequence(tile).unwrap();
+                    let prev = previous_tile_sequence(tile).unwrap();
+                    // use the variables as a pointer for removal first b4 moving the value 
+                    hand.remove_tile_from_hand(&next);
+                    hand.remove_tile_from_hand(&prev);
+                    open_mentsu.0.push(Mentsu::Shuntsu([prev, *tile, next], false));   
+                    commands.entity(message.player).insert(ForbiddenDiscard(vec![*tile]));                   
+                },
+                ChiTilePos::Left => {
+                    println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
+                    let next = next_tile_sequence(tile).unwrap();
+                    let next_next = next_tile_sequence(&next).unwrap();
 
-                        // https://riichi.wiki/Kuikae
-                        let mut forbidden = vec![];
-                        if hand.0.contains(tile) { 
-                            forbidden.push(*tile); 
-                        }
-                        if let Some(n) = next_tile_sequence(&next_next) { 
-                            forbidden.push(n); 
-                        }
-                        if !forbidden.is_empty() {
-                            commands.entity(message.player).insert(ForbiddenDiscard(forbidden));
-                        }
+                    // https://riichi.wiki/Kuikae
+                    let mut forbidden = vec![];
+                    if hand.0.contains(tile) { 
+                        forbidden.push(*tile); 
+                    }
+                    if let Some(n) = next_tile_sequence(&next_next) { 
+                        forbidden.push(n); 
+                    }
+                    if !forbidden.is_empty() {
+                        commands.entity(message.player).insert(ForbiddenDiscard(forbidden));
+                    }
 
-                        hand.remove_tile_from_hand(&next);
-                        hand.remove_tile_from_hand(&next_next);
-                        open_mentsu.0.push(Mentsu::Shuntsu([*tile, next, next_next], false));
-                        
-                    },
-                    ChiTilePos::Right => {
-                        println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
-                        let prev = previous_tile_sequence(tile).unwrap();
-                        let prev_prev = previous_tile_sequence(&prev).unwrap();
+                    hand.remove_tile_from_hand(&next);
+                    hand.remove_tile_from_hand(&next_next);
+                    open_mentsu.0.push(Mentsu::Shuntsu([*tile, next, next_next], false));
+                    
+                },
+                ChiTilePos::Right => {
+                    println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
+                    let prev = previous_tile_sequence(tile).unwrap();
+                    let prev_prev = previous_tile_sequence(&prev).unwrap();
 
-                        let mut forbidden = vec![];
-                        if hand.0.contains(tile) { 
-                            forbidden.push(*tile); 
-                        }
-                        if let Some(p) = previous_tile_sequence(&prev_prev) { 
-                            forbidden.push(p); 
-                        }
-                        if !forbidden.is_empty() {
-                            commands.entity(message.player).insert(ForbiddenDiscard(forbidden));
-                        }
-            
+                    let mut forbidden = vec![];
+                    if hand.0.contains(tile) { 
+                        forbidden.push(*tile); 
+                    }
+                    if let Some(p) = previous_tile_sequence(&prev_prev) { 
+                        forbidden.push(p); 
+                    }
+                    if !forbidden.is_empty() {
+                        commands.entity(message.player).insert(ForbiddenDiscard(forbidden));
+                    }
+        
 
-                        hand.remove_tile_from_hand(&prev);
-                        hand.remove_tile_from_hand(&prev_prev);
-                        open_mentsu.0.push(Mentsu::Shuntsu([prev_prev, prev, *tile], false));
-                    },
+                    hand.remove_tile_from_hand(&prev);
+                    hand.remove_tile_from_hand(&prev_prev);
+                    open_mentsu.0.push(Mentsu::Shuntsu([prev_prev, prev, *tile], false));
+                },
             }
             
             commands.entity(message.player).remove::<ClosedHand>();
