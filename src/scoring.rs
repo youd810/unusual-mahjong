@@ -17,10 +17,11 @@ impl HandResult {
     pub fn shot_count_from_result(&self) -> u8 {
         if self.is_yakuman { return 3; }
         match self.total_han {
+            0..=5 => 0,
             6..=7 => 1,    // haneman
             8..=10 => 2,   // baiman
             11..=12 => 2,  // sanbaiman
-            _ => 0,
+            13.. => 3,     // kazoe yakuman
         }
     }
 
@@ -290,7 +291,6 @@ pub fn evaluate_yaku(
         }
     }
 
-    // TODO: add kazoe yakuman
     if !best.yaku_names.is_empty() && !best.is_yakuman {
         let dora_count = count_dora(combined_hand, dead_wall, is_riichi);
         best.dora_count = dora_count.dora;
@@ -546,10 +546,12 @@ pub fn add_situational_yakuman(eval: &mut HandResult, kawa: &Kawa, is_oya: bool,
     
     if tenhou(kawa, is_oya, is_tsumo, calls_made) {
         eval.yaku_names.push("Tenhou".to_string());
+        eval.is_yakuman = true;
     }
 
     if chiihou(kawa, is_oya, is_tsumo, calls_made) {
         eval.yaku_names.push("Chiihou".to_string());
+        eval.is_yakuman = true;
     }
 
 }

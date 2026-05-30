@@ -129,10 +129,6 @@ pub fn resolve_accusation(
 
         if is_human {
             println!("ゲーム終了\nYou died.");
-            commands.remove_resource::<AccusationTimer>();
-            commands.remove_resource::<KawaSnapshot>();
-            commands.remove_resource::<PreBlackoutState>();
-            commands.remove_resource::<CheatLog>();
             next_state.set(TurnState::GameOver);
             return;
         }
@@ -624,11 +620,18 @@ pub fn cleanup_call_options(
     all_call: Query<Entity, Or<(With<RonOption>, With<RonDeclared>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>>,
     discard_query: Query<Entity, With<CurrentDiscard>>,
     round_result: Option<Res<RoundResult>>,
+    pre_blackout: Option<Res<PreBlackoutState>>, 
     mut commands: Commands,
 ) {
-    if round_result.is_none() {
-        for entity in &passed {
-            commands.entity(entity).insert(Furiten);
+
+    if pre_blackout.is_none() {
+        if round_result.is_none() {
+            for entity in &passed {
+                commands.entity(entity).insert(Furiten);
+            }
+        }
+        for entity in &discard_query {
+            commands.entity(entity).despawn();
         }
     }
 
@@ -639,10 +642,6 @@ pub fn cleanup_call_options(
             .remove::<PonOption>()
             .remove::<ChiOption>()
             .remove::<DaiminkanOption>();
-    }
-
-    for entity in &discard_query {
-        commands.entity(entity).despawn();
     }
 }
 
@@ -798,7 +797,9 @@ pub fn declare_tsumo(
 
 // cleanup so player doesn't prepetually qualify for tsumo
 pub fn cleanup_main_phase_options(
-    query: Query<Entity, Or<(With<TsumoOption>, With<RiichiOption>, With<AnkanOption>, With<ShouminkanOption>, With<KyuushuOption>, With<ForbiddenDiscard>, With<RiichiSelecting>)>>,
+    query: Query<Entity, Or<(With<TsumoOption>, With<RiichiOption>, With<AnkanOption>, With<ShouminkanOption>, With<KyuushuOption>, With<RiichiSelecting>)>>,
+    forbidden_query: Query<Entity, With<ForbiddenDiscard>>,
+    pre_blackout: Option<Res<PreBlackoutState>>,
     mut commands: Commands,
 ) {
     for entity in &query {
@@ -808,11 +809,15 @@ pub fn cleanup_main_phase_options(
             .remove::<AnkanOption>()
             .remove::<ShouminkanOption>()
             .remove::<KyuushuOption>()
-            .remove::<ForbiddenDiscard>()
             .remove::<RiichiSelecting>();
     }
-}
 
+    if pre_blackout.is_none() {
+        for entity in &forbidden_query {
+            commands.entity(entity).remove::<ForbiddenDiscard>();
+        }
+    }
+}
 
 
 pub fn set_tenpai(
@@ -1435,13 +1440,14 @@ pub fn declare_kan(
     }
 }
 
+pub fn spawn_camera(mut commands: Commands) { 
+    commands.spawn(Camera2d::default()); 
+}
 
 pub fn start_game(
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>
 ) {
-    commands.spawn(Camera2d::default());
-
     let mut wall = vec![];
     for _ in 0..4 {
         wall.extend(all_tiles());
@@ -1861,4 +1867,25 @@ pub fn round_cleanup(
     } else {
         next_state.set(TurnState::StartNewRound);
     }
+}
+
+
+pub fn game_cleanup(
+    mut commands: Commands,
+    players: Query<Entity, With<PlayerTag>>,
+    tiles: Query<Entity, Or<(With<DiscardedTile>, With<CurrentDiscard>)>>,
+) {
+    for entity in &players { commands.entity(entity).despawn(); }
+    for entity in &tiles { commands.entity(entity).despawn(); }
+
+    commands.remove_resource::<RoundResult>();
+    commands.remove_resource::<RoundOutcome>();
+    commands.remove_resource::<RoundSummary>();
+    commands.remove_resource::<ExecuteQueue>();
+    commands.remove_resource::<PendingTargetSelection>();
+    commands.remove_resource::<AccusationTimer>();
+    commands.remove_resource::<KawaSnapshot>();
+    commands.remove_resource::<PreBlackoutState>();
+    commands.remove_resource::<CheatLog>();
+    commands.remove_resource::<BlackoutTimer>();
 }

@@ -49,8 +49,11 @@ fn main() {
         .add_message::<TsumoDealtMessage>()
         .add_message::<PlayerEliminatedMessage>()
         .add_message::<SurvivedShotMessage>()
+        // camera
+        .add_systems(Startup, spawn_camera)
         // setup (first round)
         .add_systems(OnEnter(TurnState::Setup), (
+            game_cleanup,
             start_game,
             set_tenpai,
         ).chain())
@@ -173,6 +176,9 @@ fn main() {
             .after(declare_ron)
             .after(declare_tsumo)
         )
+        // game over ui
+        .add_systems(EguiPrimaryContextPass, game_over_ui_system
+            .run_if(in_state(TurnState::GameOver)))
         .run();
     
 }

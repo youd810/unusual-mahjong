@@ -353,7 +353,7 @@ pub fn round_end_ui_system(
                     entity, wind,
                     if summary.is_tsumo { "Tsumo" } else { "Ron" }));
 
-                if result.is_yakuman {
+               if result.is_yakuman {
                     let count = match result.yaku_names.len() {
                         2 => "DOUBLE ",
                         3 => "TRIPLE ",
@@ -363,6 +363,8 @@ pub fn round_end_ui_system(
                         _ => "",
                     };
                     ui.label(format!("{}YAKUMAN!!!", count));
+                } else if result.total_han >= 13 {
+                    ui.label("KAZOE YAKUMAN!!!");
                 }
 
                 for yaku in &result.yaku_names {
@@ -552,10 +554,43 @@ pub fn accusation_ui_system(
 }
 
 
+fn apply_debug_hand(
+    player: Entity,
+    mut tiles: Vec<Tile>,
+    draw: Tile,
+    open: Vec<Mentsu>,
+    commands: &mut Commands,
+    wall: &mut Wall,
+    current_turn: &mut CurrentTurn,
+    next_state: &mut ResMut<NextState<TurnState>>,
+) {
+    tiles.sort();
+    let tenpai_waits = check_tenpai(&tiles);
+
+    commands.entity(player).insert(Hand(tiles));
+    commands.entity(player).insert(OpenMentsu(open.clone()));
+    commands.entity(player).insert(Tenpai(tenpai_waits));
+    commands.entity(player).remove::<DrawnTile>();
+
+    if open.is_empty() {
+        commands.entity(player).insert(ClosedHand);
+    } else {
+        commands.entity(player).remove::<ClosedHand>();
+    }
+
+    wall.0.insert(0, draw);
+    current_turn.0 = player;
+    next_state.set(TurnState::Draw);
+}
+
+
 // !for testing 
 pub fn debug_ui_system(
     mut contexts: EguiContexts,
+    mut next_state: ResMut<NextState<TurnState>>,
     mut query: Query<(Entity, &mut Hand, Option<&mut DrawnTile>, Has<HumanPlayer>)>,
+    mut wall: ResMut<Wall>,
+    mut current_turn: ResMut<CurrentTurn>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
@@ -563,36 +598,53 @@ pub fn debug_ui_system(
     egui::Window::new("Debug Tools")
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(10.0, -10.0))
         .show(ctx, |ui| {
-            if ui.button("Force Daisangen").clicked() 
-            && let Some((player, mut hand, drawn, _)) = query.iter_mut().find(|(_, _, _, is_human)| *is_human) {
-                hand.0 = vec![
-                    Tile::Honor(Honor::White), Tile::Honor(Honor::White), Tile::Honor(Honor::White),
-                    Tile::Honor(Honor::Green), Tile::Honor(Honor::Green), Tile::Honor(Honor::Green),
-                    Tile::Honor(Honor::Red), Tile::Honor(Honor::Red), Tile::Honor(Honor::Red),
-                    Tile::Honor(Honor::East), Tile::Honor(Honor::East), Tile::Honor(Honor::East),
-                    Tile::Honor(Honor::South),
-                ];
+            if ui.button("Force Restart Match").clicked() {
+                next_state.set(TurnState::Setup);
+            }
 
-                if let Some(mut d) = drawn {
-                    d.0 = Tile::Honor(Honor::South);
+            ui.separator();
+            ui.label("Yaku Builder:");
+
+            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                let Some((player, _, _, _)) = query.iter_mut().find(|(_, _, _, is_human)| *is_human) else { return };
+
+                // waiting on sou 3 
+                if ui.button("Tenpai (No Yaku)").clicked() {
+                    let hand = vec![
+                        Tile::Man(1), Tile::Man(2), Tile::Man(3),
+                        Tile::Pin(4), Tile::Pin(5), Tile::Pin(6),
+                        Tile::Sou(1), Tile::Sou(2), // waiting on 3
+                        Tile::Honor(Honor::East), Tile::Honor(Honor::East),
+                        Tile::Honor(Honor::White), Tile::Honor(Honor::White), Tile::Honor(Honor::White),
+                    ];
+                    apply_debug_hand(player, hand, Tile::Sou(3), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
 
-                commands.entity(player).insert(Tenpai(vec![Tile::Honor(Honor::South)]));
+                // waiting on man 5
+                if ui.button("1 Han (Tanyao)").clicked() {
+                    let hand = vec![
+                        Tile::Man(2), Tile::Man(3), Tile::Man(4),
+                        Tile::Pin(2), Tile::Pin(3), Tile::Pin(4),
+                        Tile::Sou(6), Tile::Sou(7), Tile::Sou(8),
+                        Tile::Sou(3), Tile::Sou(3),
+                        Tile::Man(6), Tile::Man(7), 
+                    ];
+                    apply_debug_hand(player, hand, Tile::Man(5), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                }
 
-                commands.entity(player).insert(TsumoOption {
-                    result: HandResult {
-                        yaku_names: vec!["Tenhou".to_owned(), "Daisangen".to_owned(), "Tsuuisou".to_owned(), "Suuankou".to_owned()],
-                        dora_count: 0,
-                        ura_dora_count: 0,
-                        total_han: 0,
-                        total_fu: 0,
-                        is_yakuman: true,
-                    }
-                });
-
-                println!("Debug: Hand swapped to Daisangen for Human.");
-            
-            }
+                if ui.button("Ryankantsu").clicked() {
+                    let hand = vec![
+                        Tile::Man(2), Tile::Man(3), Tile::Man(4),
+                        Tile::Sou(3), Tile::Sou(3),
+                        Tile::Pin(6), Tile::Pin(7),
+                    ];
+                    let open = vec![
+                        Mentsu::Ankan([Tile::Honor(Honor::White); 4]),
+                        Mentsu::Ankan([Tile::Honor(Honor::Green); 4]),
+                    ];
+                    apply_debug_hand(player, hand, Tile::Pin(5), open, &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                }
+            });
 
             if ui.button("Force Suufon Renda").clicked() {
                 for (_, mut hand, drawn, _) in query.iter_mut() {
@@ -624,6 +676,26 @@ pub fn debug_ui_system(
                     commands.entity(entity).insert(Riichi {turns_since: 0});
                 }
                 println!("Debug: Forced Riichi onto all players.");
+            }
+        });
+}
+
+
+pub fn game_over_ui_system(
+    mut contexts: EguiContexts,
+    mut next_state: ResMut<NextState<TurnState>>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    egui::Window::new("Game Over")
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.heading("You Died");
+            ui.separator();
+            if ui.button("Restart Match").clicked() {
+                next_state.set(TurnState::Setup);
             }
         });
 }
