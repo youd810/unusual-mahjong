@@ -603,7 +603,7 @@ pub fn debug_ui_system(
             }
 
             ui.separator();
-            ui.label("Yaku Builder:");
+            ui.label("Yaku Builder");
 
             egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
                 let Some((player, _, _, _)) = query.iter_mut().find(|(_, _, _, is_human)| *is_human) else { return };
@@ -613,7 +613,7 @@ pub fn debug_ui_system(
                     let hand = vec![
                         Tile::Man(1), Tile::Man(2), Tile::Man(3),
                         Tile::Pin(4), Tile::Pin(5), Tile::Pin(6),
-                        Tile::Sou(1), Tile::Sou(2), // waiting on 3
+                        Tile::Sou(1), Tile::Sou(2),
                         Tile::Honor(Honor::East), Tile::Honor(Honor::East),
                         Tile::Honor(Honor::White), Tile::Honor(Honor::White), Tile::Honor(Honor::White),
                     ];
@@ -644,7 +644,94 @@ pub fn debug_ui_system(
                     ];
                     apply_debug_hand(player, hand, Tile::Pin(5), open, &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
+
+                // Mangan (5 han): Honitsu(3) + Yakuhai Green(1) + Tsumo(1)
+                if ui.button("Mangan (5 han)").clicked() {
+                    let hand = vec![
+                        Tile::Pin(1), Tile::Pin(2), Tile::Pin(3),
+                        Tile::Pin(4), Tile::Pin(5), Tile::Pin(6),
+                        Tile::Pin(5), Tile::Pin(6),
+                        Tile::Honor(Honor::Green), Tile::Honor(Honor::Green), Tile::Honor(Honor::Green),
+                        Tile::Pin(2), Tile::Pin(2),
+                    ];
+                    apply_debug_hand(player, hand, Tile::Pin(7), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                }
+
+                // Haneman (6 han): Honitsu(3) + Yakuhai Green(1) + Yakuhai Red(1) + Tsumo(1)
+                if ui.button("Haneman (6 han)").clicked() {
+                    let hand = vec![
+                        Tile::Pin(1), Tile::Pin(2), Tile::Pin(3),
+                        Tile::Pin(5), Tile::Pin(6),
+                        Tile::Honor(Honor::Green), Tile::Honor(Honor::Green), Tile::Honor(Honor::Green),
+                        Tile::Honor(Honor::Red), Tile::Honor(Honor::Red), Tile::Honor(Honor::Red),
+                        Tile::Pin(8), Tile::Pin(8),
+                    ];
+                    apply_debug_hand(player, hand, Tile::Pin(7), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                }
+
+                // Baiman (8 han): Honitsu(3) + Yakuhai Green(1) + Yakuhai Red(1) + Shousangen(2) + Tsumo(1)
+                if ui.button("Baiman (8 han)").clicked() {
+                    let hand = vec![
+                        Tile::Pin(1), Tile::Pin(2),
+                        Tile::Pin(5), Tile::Pin(6), Tile::Pin(7),
+                        Tile::Honor(Honor::Green), Tile::Honor(Honor::Green), Tile::Honor(Honor::Green),
+                        Tile::Honor(Honor::Red), Tile::Honor(Honor::Red), Tile::Honor(Honor::Red),
+                        Tile::Honor(Honor::White), Tile::Honor(Honor::White),
+                    ];
+                    apply_debug_hand(player, hand, Tile::Pin(3), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                }
+
+                // Kazoe Yakuman (13 han): Chinitsu(6) + Ryanpeikou(3) + Tanyao(1) + Pinfu(1) + Riichi(1) + Tsumo(1)
+                if ui.button("Kazoe Yakuman (13 han)").clicked() {
+                    let hand = vec![
+                        Tile::Pin(2), Tile::Pin(2), Tile::Pin(3), Tile::Pin(3),
+                        Tile::Pin(4), Tile::Pin(4), Tile::Pin(5), Tile::Pin(5),
+                        Tile::Pin(6), Tile::Pin(6), Tile::Pin(7),
+                        Tile::Pin(8), Tile::Pin(8),
+                    ];
+                    commands.entity(player).insert(Riichi { turns_since: 0 });
+                    apply_debug_hand(player, hand, Tile::Pin(7), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                }
+
+                // Chiitoitsu (tests chiitoitsu evaluation path)
+                if ui.button("Chiitoitsu").clicked() {
+                    let hand = vec![
+                        Tile::Pin(2), Tile::Pin(2), Tile::Pin(4), Tile::Pin(4),
+                        Tile::Pin(6), Tile::Pin(6), Tile::Sou(3), Tile::Sou(3),
+                        Tile::Sou(5), Tile::Sou(5), Tile::Man(8), Tile::Man(8),
+                        Tile::Man(2),
+                    ];
+                    apply_debug_hand(player, hand, Tile::Man(2), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                }
+
+                // Kokushi Musou (yakuman, tests kokushi detection path)
+                if ui.button("Kokushi Musou").clicked() {
+                    let hand = vec![
+                        Tile::Man(1), Tile::Man(9), Tile::Pin(1), Tile::Pin(9),
+                        Tile::Sou(1), Tile::Sou(9),
+                        Tile::Honor(Honor::East), Tile::Honor(Honor::South),
+                        Tile::Honor(Honor::West), Tile::Honor(Honor::North),
+                        Tile::Honor(Honor::White),
+                        Tile::Honor(Honor::Green), Tile::Honor(Honor::Green),
+                    ];
+                    apply_debug_hand(player, hand, Tile::Honor(Honor::Red), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                }
+
+                // Daisangen (yakuman, tests standard yakuman path)
+                if ui.button("Daisangen").clicked() {
+                    let hand = vec![
+                        Tile::Honor(Honor::White), Tile::Honor(Honor::White), Tile::Honor(Honor::White),
+                        Tile::Honor(Honor::Green), Tile::Honor(Honor::Green), Tile::Honor(Honor::Green),
+                        Tile::Honor(Honor::Red), Tile::Honor(Honor::Red), Tile::Honor(Honor::Red),
+                        Tile::Man(1), Tile::Man(2),
+                        Tile::Honor(Honor::East), Tile::Honor(Honor::East),
+                    ];
+                    apply_debug_hand(player, hand, Tile::Man(3), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                }
             });
+
+            ui.separator();
+            ui.label("Tochuu Ryuukyoku");
 
             if ui.button("Force Suufon Renda").clicked() {
                 for (_, mut hand, drawn, _) in query.iter_mut() {
