@@ -7,6 +7,7 @@ use crate::components::*;
 use crate::resources::*;
 use crate::messages::*;
 
+// TODO: make bots more assertive to yakuhai calls (or just call in general) if their hand already has other yaku
 
 pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
@@ -131,11 +132,18 @@ pub fn bot_call_system(
         combined_hand.push(discard_query.0);
         let post_call_shanten = calculate_shanten(&combined_hand);
 
-        let has_yaku_path = check_open_yaku(&combined_hand, &jikaze.0, &game.bakaze);
+        let yaku_han = estimate_yaku_han(&combined_hand, &jikaze.0, &game.bakaze);
+        let has_yaku_path = yaku_han > 0;
+
+        let dora_count = count_dora(&combined_hand, &*dead_wall, false).dora;
+        let total_estimated_han = yaku_han + dora_count;
+
+        // scale aggressiveness drastically based on estimated han value
+        let value_multiplier = 1.0 + (total_estimated_han as f32 * 0.3);
 
         // ! consider adding composure into the equation (that makes aggressivenes and speed higher)
-        let shanten_chance = (profile.aggressiveness / (post_call_shanten as f32 + 1.0)) * profile.speed;
-        let dora_chance = profile.speed + (count_dora(&combined_hand, &*dead_wall, false).dora as f32 * 0.25);
+        let shanten_chance = (profile.aggressiveness * value_multiplier / (post_call_shanten as f32 + 1.0)) * profile.speed;
+        let dora_chance = (profile.speed * value_multiplier) + (dora_count as f32 * 0.25);
 
         let mut rng = rand::rng();
         if pre_call_shanten >= post_call_shanten && has_yaku_path && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance) {

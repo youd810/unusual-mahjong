@@ -506,12 +506,17 @@ pub fn evaluate_chiitoitsu(
         is_yakuman: false,
     };
 
-    // yakuman
+    // yakuman 
     if tsuuisou(raw_hand) {
         eval.yaku_names.clear();
         eval.yaku_names.push("Tsuuiisou".to_string());
         eval.is_yakuman = true;
-        add_situational_yakuman(&mut eval, kawa, is_oya, is_tsumo, calls_made);
+    }
+
+    add_situational_yakuman(&mut eval, kawa, is_oya, is_tsumo, calls_made);
+
+    if eval.is_yakuman {
+        eval.yaku_names.remove(0);
         return eval;
     }
 

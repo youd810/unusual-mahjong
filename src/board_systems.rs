@@ -23,7 +23,7 @@ pub fn blackout_check_system(
         return;
     }
 
-    if rand::random::<f32>() > 0.008 {
+    if rand::random::<f32>() > 0.002 {
         return;
     }
 
@@ -649,14 +649,18 @@ pub fn cleanup_call_options(
 // refer to ron counterpart
 pub fn tsumo_check(
     current_turn: Res<CurrentTurn>,
-    query: Query<(&Hand, &OpenMentsu, &Tenpai, &Kawa, &Jikaze, &DrawnTile, Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>)>,
+    query: Query<(
+        &Hand, &OpenMentsu, 
+        &Tenpai, &Kawa, 
+        &Jikaze, &DrawnTile, 
+        Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>, Has<DrawnFromRinshan>)>,
     game: Res<GameState>,
     wall: Res<Wall>,
     dead_wall: Res<DeadWall>,
     mut commands: Commands,
 ) {
     if let Ok((hand, open_mentsu, tenpai, kawa, jikaze, drawn,
-              is_closed, is_oya, is_riichi, is_ippatsu, is_double)) = query.get(current_turn.0)
+              is_closed, is_oya, is_riichi, is_ippatsu, is_double, is_rinshan)) = query.get(current_turn.0)
     
         && let Some(result) = can_declare_tsumo(
             &drawn.0, 
@@ -673,7 +677,7 @@ pub fn tsumo_check(
             &jikaze.0,
             &*wall, 
             &*dead_wall,
-            game.pending_rinshan, 
+            is_rinshan, 
             game.calls_made,
         ) {
             commands.entity(current_turn.0).insert(TsumoOption { result });
@@ -809,7 +813,8 @@ pub fn cleanup_main_phase_options(
             .remove::<AnkanOption>()
             .remove::<ShouminkanOption>()
             .remove::<KyuushuOption>()
-            .remove::<RiichiSelecting>();
+            .remove::<RiichiSelecting>()
+            .remove::<DrawnFromRinshan>();
     }
 
     if pre_blackout.is_none() {
@@ -1555,7 +1560,11 @@ pub fn rinshan_draw(
     let drawn = dead_wall.rinshan_tiles.remove(0);
     println!("{} draws {:?} from rinshan", current_turn.0, drawn);
 
-    commands.entity(current_turn.0).insert(DrawnTile(drawn));
+    commands.entity(current_turn.0).insert((
+        DrawnTile(drawn),
+        DrawnFromRinshan,
+    ));
+
     dead_wall.filler_tiles.push(wall.0.pop().unwrap());
 
     next_state.set(TurnState::MainPhase);
@@ -1637,7 +1646,9 @@ pub fn discard_tile(
                 game.pending_kan_dora = false;
             }
 
-            commands.entity(message.player).remove::<ForbiddenDiscard>();
+            commands.entity(message.player)
+                .remove::<ForbiddenDiscard>()
+                .remove::<DrawnFromRinshan>();
             next_state.set(TurnState::CallWindow);
 
             println!("{} discards {:?}", message.player, message.tile);
@@ -1796,7 +1807,15 @@ pub fn round_cleanup(
         RoundEndReason::TochuuRyuukyoku => println!("Round end: Tochuu ryuukyoku"),
     }
     match result.0 {
-        RoundEndReason::OyaWin | RoundEndReason::RyuukyokuOyaTenpai | RoundEndReason::TochuuRyuukyoku => {game.honba += 1},
+        RoundEndReason::OyaWin | RoundEndReason::RyuukyokuOyaTenpai | RoundEndReason::TochuuRyuukyoku => {
+            game.honba += 1;
+            for (player, _, is_oya) in query.iter() {
+                if is_oya {
+                    commands.insert_resource(CurrentTurn(player));
+                    break;
+                }
+            }
+        },
         RoundEndReason::NonOyaWin | RoundEndReason::RyuukyokuOyaNoten => { 
             game.honba = 0;
             if game.bakaze == Wind::East && game.rounds == 4 {

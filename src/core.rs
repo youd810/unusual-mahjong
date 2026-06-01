@@ -453,15 +453,20 @@ pub fn evaluate_discard(
 }
 
 
-pub fn check_open_yaku(combined_hand: &[Tile], jikaze: &Wind, bakaze: &Wind) -> bool {
-    // 1. Tanyao check
-    if tanyao(combined_hand) {
-        return true;
-    }
-
-    // 2. Yakuhai check
+// TODO: needs refinement
+pub fn estimate_yaku_han(combined_hand: &[Tile], jikaze: &Wind, bakaze: &Wind) -> u8 {
+    let mut han = 0;
     let freq = tiles_to_frequency_array(combined_hand);
 
+    // suit
+    if chinitsu(combined_hand) { han += 5; }
+    else if honitsu(combined_hand) { han += 2; }
+
+    // num
+    if tanyao(combined_hand) { han += 1; }
+    if honroutou(combined_hand) { han += 2; }
+
+    // yakuhai
     let yakuhai_indexes =[
         tile_to_index(&Tile::Honor(Honor::Red)),
         tile_to_index(&Tile::Honor(Honor::Green)),
@@ -469,12 +474,46 @@ pub fn check_open_yaku(combined_hand: &[Tile], jikaze: &Wind, bakaze: &Wind) -> 
         tile_to_index(&Tile::Honor(jikaze.wind_to_honor())),
         tile_to_index(&Tile::Honor(bakaze.wind_to_honor())),
     ];
-
-    if yakuhai_indexes.iter().any(|&idx| freq[idx] >= 2) {
-        return true;
+    for &idx in &yakuhai_indexes {
+        if freq[idx] >= 2 { han += 1; }
     }
 
-    false
+    // toitoi
+    let pairs_or_triplets = freq.iter().filter(|&&f| f >= 2).count();
+    if pairs_or_triplets >= 4 { han += 2; }
+
+    // chanta
+    let yaochuuhai_count = combined_hand.iter().filter(|t| is_yaochuuhai(t)).count();
+    if yaochuuhai_count >= 8 && !tanyao(combined_hand) {
+        han += 1;
+    }
+
+    // itsuu
+    for suit_offset in[0, 9, 18] {
+        let count = (0..9).filter(|&i| freq[suit_offset + i] > 0).count();
+        if count >= 7 {
+            han += 1;
+            break;
+        }
+    }
+
+    // sanshoku doujun
+    for i in 0..7 {
+        let man_has = freq[i] > 0 || freq[i+1] > 0 || freq[i+2] > 0;
+        let pin_has = freq[i+9] > 0 || freq[i+10] > 0 || freq[i+11] > 0;
+        let sou_has = freq[i+18] > 0 || freq[i+19] > 0 || freq[i+20] > 0;
+
+        if man_has && pin_has && sou_has {
+            // check if they have at least 6 tiles contributing to this sequence neighborhood
+            let total_tiles = (0..3).map(|offset| freq[i+offset] + freq[i+9+offset] + freq[i+18+offset]).sum::<u8>();
+            if total_tiles >= 6 {
+                han += 1;
+                break;
+            }
+        }
+    }
+
+    han
 }
 
 

@@ -36,6 +36,7 @@ fn main() {
         .insert_resource(BlackoutCheckTimer(Timer::from_seconds(0.5, TimerMode::Repeating)))
         .init_resource::<BlackoutTileSelection>()
         .init_resource::<CheatLog>()
+        .init_resource::<Omniscience>()
         // messages
         .add_message::<DiscardTileMessage>()
         .add_message::<DeclarePonMessage>()

@@ -234,6 +234,7 @@ pub fn info_display_ui_system(
         Entity,
         &Points,
         &Jikaze,
+        &Hand,
         &Kawa,
         &OpenMentsu,
         Has<HumanPlayer>,
@@ -241,6 +242,7 @@ pub fn info_display_ui_system(
         Has<Oya>,
         Has<Alive>,
     ), With<PlayerTag>>,
+    omniscience: Res<Omniscience>
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
 
@@ -261,18 +263,26 @@ pub fn info_display_ui_system(
                     ui.label(format!("{:?}", dora));
                 }
             });
+            if omniscience.0 {
+                ui.label("next draws:");
+                ui.horizontal_wrapped(|ui| {
+                    for tile in wall.0.iter().take(5) {
+                        ui.label(format!("{:?}", tile));
+                    }
+                });
+            }
         });
 
     // players
     let mut players: Vec<_> = player_query.iter().collect();
-    players.sort_by_key(|(_, _, jikaze, _, _, _, _, _, _)| jikaze.0.to_num());
+    players.sort_by_key(|(_, _, jikaze, _, _, _, _, _, _, _)| jikaze.0.to_num());
 
     egui::Window::new("Players")
-        .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 120.0))
+        .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 160.0))
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
-            for (player, points, jikaze, kawa, open, is_human, is_riichi, is_oya, is_alive) in &players {
+            for (player, points, jikaze, hand, kawa, open, is_human, is_riichi, is_oya, is_alive) in &players {
                 let is_current = *player == current_turn.0;
 
                 let mut label = String::new();
@@ -288,6 +298,15 @@ pub fn info_display_ui_system(
                 egui::CollapsingHeader::new(label)
                     .default_open(true)
                     .show(ui, |ui| {
+                        // reveal all hands
+                        if *is_human || omniscience.0 {
+                            ui.label("hand:");
+                            ui.horizontal_wrapped(|ui| {
+                                for tile in &hand.0 {
+                                    ui.label(format!("{:?}", tile));
+                                }
+                            });
+                        }
                         // open mentsu
                         if !open.0.is_empty() {
                             ui.horizontal_wrapped(|ui| {
@@ -591,6 +610,7 @@ pub fn debug_ui_system(
     mut query: Query<(Entity, &mut Hand, Option<&mut DrawnTile>, Has<HumanPlayer>)>,
     mut wall: ResMut<Wall>,
     mut current_turn: ResMut<CurrentTurn>,
+    mut omniscience: ResMut<Omniscience>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
@@ -601,6 +621,9 @@ pub fn debug_ui_system(
             if ui.button("Force Restart Match").clicked() {
                 next_state.set(TurnState::Setup);
             }
+
+            ui.separator();
+            ui.checkbox(&mut omniscience.0, "Reveal Hands");
 
             ui.separator();
             ui.label("Yaku Builder");
@@ -645,7 +668,7 @@ pub fn debug_ui_system(
                     apply_debug_hand(player, hand, Tile::Pin(5), open, &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
 
-                // Mangan (5 han): Honitsu(3) + Yakuhai Green(1) + Tsumo(1)
+                // mangan (5 han): honitsu(3) + yakuhai green(1) + tsumo(1)
                 if ui.button("Mangan (5 han)").clicked() {
                     let hand = vec![
                         Tile::Pin(1), Tile::Pin(2), Tile::Pin(3),
@@ -657,7 +680,7 @@ pub fn debug_ui_system(
                     apply_debug_hand(player, hand, Tile::Pin(7), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
 
-                // Haneman (6 han): Honitsu(3) + Yakuhai Green(1) + Yakuhai Red(1) + Tsumo(1)
+                // haneman (6 han): honitsu(3) + yakuhai green(1) + yakuhai red(1) + tsumo(1)
                 if ui.button("Haneman (6 han)").clicked() {
                     let hand = vec![
                         Tile::Pin(1), Tile::Pin(2), Tile::Pin(3),
@@ -669,7 +692,7 @@ pub fn debug_ui_system(
                     apply_debug_hand(player, hand, Tile::Pin(7), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
 
-                // Baiman (8 han): Honitsu(3) + Yakuhai Green(1) + Yakuhai Red(1) + Shousangen(2) + Tsumo(1)
+                // baiman (8 han): honitsu(3) + yakuhai green(1) + yakuhai red(1) + shousangen(2) + tsumo(1)
                 if ui.button("Baiman (8 han)").clicked() {
                     let hand = vec![
                         Tile::Pin(1), Tile::Pin(2),
@@ -681,7 +704,7 @@ pub fn debug_ui_system(
                     apply_debug_hand(player, hand, Tile::Pin(3), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
 
-                // Kazoe Yakuman (13 han): Chinitsu(6) + Ryanpeikou(3) + Tanyao(1) + Pinfu(1) + Riichi(1) + Tsumo(1)
+                // kazoe yakuman (13 han): chinitsu(6) + ryanpeikou(3) + tanyao(1) + pinfu(1) + riichi(1) + tsumo(1)
                 if ui.button("Kazoe Yakuman (13 han)").clicked() {
                     let hand = vec![
                         Tile::Pin(2), Tile::Pin(2), Tile::Pin(3), Tile::Pin(3),
@@ -693,7 +716,7 @@ pub fn debug_ui_system(
                     apply_debug_hand(player, hand, Tile::Pin(7), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
 
-                // Chiitoitsu (tests chiitoitsu evaluation path)
+                // chiitoitsu (tests chiitoitsu evaluation path)
                 if ui.button("Chiitoitsu").clicked() {
                     let hand = vec![
                         Tile::Pin(2), Tile::Pin(2), Tile::Pin(4), Tile::Pin(4),
@@ -704,7 +727,8 @@ pub fn debug_ui_system(
                     apply_debug_hand(player, hand, Tile::Man(2), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
 
-                // Kokushi Musou (yakuman, tests kokushi detection path)
+                // kokushi musou (yakuman, tests kokushi detection path)
+                // draws non yaochuuhai to test ron
                 if ui.button("Kokushi Musou").clicked() {
                     let hand = vec![
                         Tile::Man(1), Tile::Man(9), Tile::Pin(1), Tile::Pin(9),
@@ -712,12 +736,12 @@ pub fn debug_ui_system(
                         Tile::Honor(Honor::East), Tile::Honor(Honor::South),
                         Tile::Honor(Honor::West), Tile::Honor(Honor::North),
                         Tile::Honor(Honor::White),
-                        Tile::Honor(Honor::Green), Tile::Honor(Honor::Green),
+                        Tile::Honor(Honor::Green), Tile::Honor(Honor::Red),
                     ];
-                    apply_debug_hand(player, hand, Tile::Honor(Honor::Red), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                    apply_debug_hand(player, hand, Tile::Pin(5), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
 
-                // Daisangen (yakuman, tests standard yakuman path)
+                // daisangen (yakuman, tests standard yakuman path)
                 if ui.button("Daisangen").clicked() {
                     let hand = vec![
                         Tile::Honor(Honor::White), Tile::Honor(Honor::White), Tile::Honor(Honor::White),

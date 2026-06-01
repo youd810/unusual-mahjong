@@ -146,3 +146,6 @@ pub enum SelectedSource {
 pub struct BlackoutTileSelection {
      pub selected: SelectedSource,
 }
+
+#[derive(Resource, Default)]
+pub struct Omniscience(pub bool);
