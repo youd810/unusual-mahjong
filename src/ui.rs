@@ -607,11 +607,14 @@ fn apply_debug_hand(
 pub fn debug_ui_system(
     mut contexts: EguiContexts,
     mut next_state: ResMut<NextState<TurnState>>,
+    state: Res<State<TurnState>>,            
+    kawa_query: Query<(Entity, &Kawa)>,      
     mut query: Query<(Entity, &mut Hand, Option<&mut DrawnTile>, Has<HumanPlayer>)>,
     mut wall: ResMut<Wall>,
     mut current_turn: ResMut<CurrentTurn>,
     mut omniscience: ResMut<Omniscience>,
     mut commands: Commands,
+    mut revolver: ResMut<Revolver>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
 
@@ -624,6 +627,21 @@ pub fn debug_ui_system(
 
             ui.separator();
             ui.checkbox(&mut omniscience.0, "Reveal Hands");
+
+            ui.separator();
+            if ui.button("Force Blackout").clicked() {
+                let all_kawa = kawa_query.iter()
+                    .map(|(e, kawa)| (e, kawa.0.clone()))
+                    .collect();
+
+                commands.insert_resource(KawaSnapshot { all_kawa });
+                commands.insert_resource(PreBlackoutState(state.get().clone()));
+                commands.insert_resource(CheatLog::default());
+                commands.insert_resource(BlackoutTimer(Timer::from_seconds(5.0, TimerMode::Once)));
+
+                next_state.set(TurnState::Blackout);
+                println!("Debug: Forced Blackout.");
+            }
 
             ui.separator();
             ui.label("Yaku Builder");
@@ -788,6 +806,31 @@ pub fn debug_ui_system(
                 }
                 println!("Debug: Forced Riichi onto all players.");
             }
+
+            ui.separator();
+            ui.label("Revolver Manipulation");
+
+            ui.add(egui::Slider::new(&mut revolver.bullet, 1..=6).text("Bullet Position"));
+            ui.add(egui::Slider::new(&mut revolver.chamber, 1..=6).text("Current Chamber"));
+
+            if revolver.chamber > revolver.bullet {
+                revolver.bullet = revolver.chamber;
+            }
+
+            ui.horizontal(|ui| {
+                if ui.button("Force Next Lethal").clicked() {
+                    revolver.chamber = revolver.bullet;
+                }
+                let is_lethal = revolver.chamber == revolver.bullet;
+                if ui.add_enabled(is_lethal, egui::Button::new("Force Next Safe")).clicked() {
+                    if revolver.bullet == 6 {
+                        revolver.bullet = 2;
+                        revolver.chamber = 1;
+                    } else {
+                        revolver.bullet += 1;
+                    }
+                }
+            });
         });
 }
 
