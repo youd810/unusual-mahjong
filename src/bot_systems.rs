@@ -158,7 +158,7 @@ pub fn bot_call_system(
 
         // candidates: (score, action_index)
         // 0 = kan, 1 = pon, 2+ = chi at positions[idx - 2]
-        let mut candidates: Vec<((i32, i32, i32, i32), usize)> = Vec::new();
+        let mut candidates: Vec<((i32, i32, i32, i32), usize)> = vec![];
 
         if let Some(k) = kan {
             let mut temp_hand = hand.0.clone();
@@ -225,12 +225,12 @@ pub fn bot_call_system(
                 _ => {
                     let c = chi.unwrap();
                     chi_writer.write(DeclareChiMessage {
-                        player, tile: c.tile, pos: c.positions[best_idx - 2], discarded_by: discarded_by.0,
+                        player, tile: c.tile, pos: c.positions[best_idx - 2],
                     });
                 }
             }
         }
-        
+
         if kan.is_some() { commands.entity(player).remove::<DaiminkanOption>(); }
         if pon.is_some() { commands.entity(player).remove::<PonOption>(); }
         if chi.is_some() { commands.entity(player).remove::<ChiOption>(); }
@@ -238,7 +238,6 @@ pub fn bot_call_system(
 }
 
 
-// ! unused
 pub fn bot_main_phase_system(
     query: Query<(
         Entity,
@@ -390,7 +389,7 @@ pub fn bot_cheat_execution_system(
 
         let baseline_score = (current_shanten, -current_ukeire, -current_dora);
         let mut best_score = baseline_score;
-        let mut best_swaps = Vec::new();
+        let mut best_swaps = vec![];
 
         // ! consider bot not stealing from their own kawa (makes it easier to figure out the cheater)
         for (target_entity, target_kawa) in kawa_query.iter() {
@@ -471,7 +470,7 @@ pub fn bot_accusation_decision_system(
 
     for (bot_entity, profile, bot_jikaze) in &query {
         
-        let mut detected_tampering: Vec<Entity> = Vec::new();
+        let mut detected_tampering: Vec<Entity> = vec![];
 
         // scan kawa
         for (snap_entity, snap_kawa) in &snapshot.all_kawa {

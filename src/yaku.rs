@@ -96,30 +96,33 @@ pub fn sanankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool, thirteen
     result
         .iter()
         .filter(|mentsu| {
-            let tile = match mentsu {
-                Mentsu::Koutsu(tiles, true) => tiles[0],
-                Mentsu::Ankan(tiles) => tiles[0],
-                _ => return false,
-            };
-            
-            // compares result with thirteen tiles to see if the winning tile forms the final koutsu and doesn't come from ron 
-            // this check should suffice, or shouldn't it?
-            !(tile == *winning_tile && !is_tsumo && thirteen_tiles.iter().filter(|x| *x == winning_tile).count() == 2)
-        }).count() == 3
+            match mentsu {
+                Mentsu::Ankan(_) => true,
+                Mentsu::Koutsu(tiles, true) => {
+                    // compares result with thirteen tiles to see if the winning tile forms the final koutsu and doesn't come from ron 
+                    // this check should suffice, or shouldn't it?
+                    !(tiles[0] == *winning_tile && !is_tsumo && thirteen_tiles.iter().filter(|x| **x == *winning_tile).count() == 2)
+                }
+                _ => false,
+            }
+        })
+        .count() == 3
 }
 
 
 pub fn suuankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool) -> bool {
     result
         .iter()
-        .filter(|mentsu|{
-            let tile = match mentsu {
-                Mentsu::Koutsu(tiles, true) => tiles[0],
-                Mentsu::Ankan(tiles) => tiles[0],
-                _ => return false,
-            };
-            tile != *winning_tile || is_tsumo
-        }).count() == 4 
+        .filter(|mentsu| {
+            match mentsu {
+                Mentsu::Ankan(_) => true, 
+                Mentsu::Koutsu(tiles, true) => {
+                    tiles[0] != *winning_tile || is_tsumo
+                }
+                _ => false,
+            }
+        })
+        .count() == 4
 }
 
 

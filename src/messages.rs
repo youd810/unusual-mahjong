@@ -13,7 +13,6 @@ pub struct DeclareChiMessage {
     pub player: Entity,       
     pub tile: Tile,           
     pub pos: ChiTilePos,  
-    pub discarded_by: Entity,    
 }
 
 #[derive(Message)]

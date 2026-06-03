@@ -89,7 +89,6 @@ pub fn call_window_ui_system(
     mut pon_writer: MessageWriter<DeclarePonMessage>,
     mut chi_writer: MessageWriter<DeclareChiMessage>,
     mut kan_writer: MessageWriter<DeclareKanMessage>,
-    discard_query: Query<&DiscardedBy, With<CurrentDiscard>>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return; };
@@ -111,7 +110,7 @@ pub fn call_window_ui_system(
                         pon_writer.write(DeclarePonMessage { player, tile: p.0 });  
                     }
                     
-                    if let Some(c) = chi && let Ok(discarded_by) = discard_query.single() {
+                    if let Some(c) = chi {
                         for pos in &c.positions {
                             let label = match pos {
                                 ChiTilePos::Left => {
@@ -136,7 +135,6 @@ pub fn call_window_ui_system(
                                     player,
                                     tile: c.tile,
                                     pos: *pos,
-                                    discarded_by: discarded_by.0,
                                 });
                             }
                         }

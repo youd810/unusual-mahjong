@@ -68,6 +68,7 @@ fn main() {
         // main phase
         .add_systems(OnEnter(TurnState::MainPhase), (
             |mut lock: ResMut<CallLock>| lock.0 = false,
+            clear_temp_furiten,
             tsumo_check,
             riichi_check,
             kyuushu_check,
@@ -78,7 +79,7 @@ fn main() {
             declare_tsumo,
             declare_riichi,
             declare_kyuushu,
-            declare_kan,
+            declare_drawn_kan,
             bot_main_phase_system,
             bot_discard_system,
             discard_tile,
@@ -107,7 +108,7 @@ fn main() {
         .add_systems(Update, (
             bot_call_system,
             declare_ron,
-            declare_kan,
+            declare_discarded_kan,
             declare_pon,
             declare_chi,
             auto_advance_call_window,

@@ -376,7 +376,7 @@ pub fn bot_tilt_system(
 
 
 pub fn check_ryuukyoku(
-    query: Query<(Entity, &Kawa, Has<Oya>)>,
+    query: Query<(Entity, &Kawa, Has<Oya>), (With<Alive>, Without<DiscardWasCalled>)>,
     mut points_query: Query<(Entity, &mut Points, Has<Oya>)>,
     oya_tenpai_query: Single<Has<Tenpai>, With<Oya>>,
     wall: Res<Wall>,
@@ -390,28 +390,70 @@ pub fn check_ryuukyoku(
 
     if wall.0.is_empty() {
         println!("Ryuukyoku! Wall exhausted. Oya tenpai: {}", *oya_tenpai_query);
-        for (nagashi_candidate, kawa, is_candidate_oya) in query {
+        let mut nagashi_winners: Vec<(Entity, HandResult, u32)> = vec![];
+        let mut any_oya_won = false;
+            
+
+        for (nagashi_candidate, kawa, is_candidate_oya) in query.iter() {
             if nagashi_mangan(kawa) {
                 println!("{} Has achieved Nagashi Mangan!", nagashi_candidate);
+
+                let result = HandResult {
+                    yaku_names: vec!["Nagashi Mangan".to_string()],
+                    dora_count: 0,
+                    ura_dora_count: 0,
+                    total_han: 5,
+                    total_fu: 20,
+                    is_yakuman: false,
+                };
+
+                // treat as tsumo
+                let score = calculate_score(result.total_han, 
+                    result.total_fu, is_candidate_oya, true, false, &result.yaku_names);
+
                 for (player, mut points, is_oya) in points_query.iter_mut() {
-                    if nagashi_candidate != player && is_oya {
-                        points.0 -= 4000;
-                    } else if nagashi_candidate != player && !is_oya {
-                        if is_candidate_oya { points.0 -= 4000; } else { points.0 -= 2000; }
-                    } else if nagashi_candidate == player && is_oya {
-                        points.0 += 12000;
-                    } else if nagashi_candidate == player && !is_oya {
-                        points.0 += 8000;
+                    if player == nagashi_candidate {
+                        points.0 += score.total_won as i32;
+                    } else {
+                        if is_oya {
+                            points.0 -= score.oya_pays as i32;
+                        } else {
+                            points.0 -= score.non_oya_pays as i32;
+                        }
                     }
+                }
+                nagashi_winners.push((nagashi_candidate, result, score.total_won));
+                if is_candidate_oya {
+                    any_oya_won = true;
                 }
             }
         }
+
+        if !nagashi_winners.is_empty() {
+            commands.insert_resource(RoundOutcome {
+                winners: nagashi_winners,
+                loser: None,
+                is_tsumo: true,
+                tochuu_causer: vec![],
+            });
+
+            if any_oya_won {
+                commands.insert_resource(RoundResult(RoundEndReason::OyaWin));
+            } else {
+                commands.insert_resource(RoundResult(RoundEndReason::NonOyaWin));
+            }
+
+            next_state.set(TurnState::RoundEnd);
+            return; // Abort standard ryuukyoku!
+        }
+
         if *oya_tenpai_query {
             commands.insert_resource(RoundResult(RoundEndReason::RyuukyokuOyaTenpai));
         } else {
             commands.insert_resource(RoundResult(RoundEndReason::RyuukyokuOyaNoten));
         }
         next_state.set(TurnState::RoundEnd);
+
     }
 }
 
@@ -635,24 +677,44 @@ pub fn declare_ron(
 }
 
 
-// cleanup so player doesn't prepetually qualify for ron
-pub fn cleanup_call_options(
-    passed: Query<Entity, (With<RonOption>, Without<RonDeclared>)>,
-    all_call: Query<Entity, Or<(With<RonOption>, With<RonDeclared>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>>,
-    discard_query: Query<Entity, With<CurrentDiscard>>,
-    round_result: Option<Res<RoundResult>>,
-    pre_blackout: Option<Res<PreBlackoutState>>, 
+pub fn clear_temp_furiten(
+    current_turn: Res<CurrentTurn>,
+    query: Query<Has<Riichi>>,
     mut commands: Commands,
 ) {
+    if let Ok(is_riichi) = query.get(current_turn.0) {
+        if !is_riichi {
+            commands.entity(current_turn.0).remove::<Furiten>();
+        }
+    }
+}
 
-    if pre_blackout.is_none() {
-        if round_result.is_none() {
-            for entity in &passed {
-                commands.entity(entity).insert(Furiten);
+
+// cleanup so player doesn't prepetually qualify for ron
+pub fn cleanup_call_options(
+    all_call: Query<Entity, Or<(With<RonOption>, With<RonDeclared>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>>,
+    discard_query: Single<(Entity, &DiscardedTile, &DiscardedBy), With<CurrentDiscard>>,
+    called_check: Query<(), With<DiscardWasCalled>>,
+    furiten_check: Query<(Entity, &Tenpai)>,
+    round_result: Option<Res<RoundResult>>,
+    pre_blackout: Option<Res<PreBlackoutState>>,
+    mut commands: Commands,
+) {
+    if pre_blackout.is_none() && round_result.is_none() {
+        let (discard_entity, discarded_tile, discarded_by) = *discard_query;
+
+        // apply temp furiten to anyone in tenpai waiting on this tile
+        for (player, tenpai) in &furiten_check {
+            if tenpai.0.contains(&discarded_tile.0) {
+                commands.entity(player).insert(Furiten);
             }
         }
-        for entity in &discard_query {
-            commands.entity(entity).despawn();
+
+        if called_check.contains(discarded_by.0) {
+            // despawn after called 
+            commands.entity(discard_entity).despawn();
+        } else {
+            commands.entity(discard_entity).remove::<CurrentDiscard>();
         }
     }
 
@@ -665,6 +727,7 @@ pub fn cleanup_call_options(
             .remove::<DaiminkanOption>();
     }
 }
+
 
 
 // refer to ron counterpart
@@ -1111,7 +1174,7 @@ pub fn declare_pon(
     mut messages: MessageReader<DeclarePonMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
-    tile_query: Single<Entity, With<CurrentDiscard>>,
+    discard_query: Single<&DiscardedBy, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
@@ -1126,6 +1189,7 @@ pub fn declare_pon(
         if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player) 
             && can_declare_pon(&hand.0 ,&message.tile) { 
                 lock.0 = true;
+                commands.entity(discard_query.0).insert(DiscardWasCalled);
 
                 open_mentsu.0.push(Mentsu::Koutsu([message.tile; 3], false));
                 println!("{} declares Pon on {:?}", message.player, message.tile);
@@ -1139,7 +1203,6 @@ pub fn declare_pon(
                     commands.entity(player).remove::<Ippatsu>();
                 }
                 commands.entity(message.player).remove::<ClosedHand>();
-                commands.entity(*tile_query).despawn(); 
                 commands.entity(message.player).insert(ForbiddenDiscard(vec![message.tile]));
                 game.calls_made = true;
                 current_turn.0 = message.player;
@@ -1175,7 +1238,7 @@ pub fn declare_chi(
     mut messages: MessageReader<DeclareChiMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, &Jikaze)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
-    tile_query: Single<Entity, With<CurrentDiscard>>,
+    discard_query: Single<&DiscardedBy, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
@@ -1192,7 +1255,7 @@ pub fn declare_chi(
             Ok((_, _, discard_jikaze))
         ) = (
             query.get(message.player),
-            query.get(message.discarded_by)
+            query.get(discard_query.0)
         ) {
             let positions = can_declare_chi(&hand.0, &message.tile);
             !positions.is_empty()
@@ -1204,6 +1267,7 @@ pub fn declare_chi(
 
         if is_valid && let Ok((mut hand, mut open_mentsu, _))= query.get_mut(message.player) {
             lock.0 = true;
+            commands.entity(discard_query.0).insert(DiscardWasCalled);
 
             let pos: &ChiTilePos = &message.pos; // let the player choose 
             let tile = &message.tile;
@@ -1264,8 +1328,7 @@ pub fn declare_chi(
                 },
             }
             
-            commands.entity(message.player).remove::<ClosedHand>();
-            commands.entity(*tile_query).despawn(); 
+            commands.entity(message.player).remove::<ClosedHand>(); 
             game.calls_made = true;
             for player in ippatsu_query.iter() {
                 commands.entity(player).remove::<Ippatsu>();
@@ -1372,11 +1435,11 @@ pub fn shouminkan_check(
 }
 
 
-pub fn declare_kan(
+// ankan + shouminkan 
+pub fn declare_drawn_kan(
     mut messages: MessageReader<DeclareKanMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&DrawnTile>)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
-    tile_query: Query<Entity, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut dead_wall: ResMut<DeadWall>,
     mut current_turn: ResMut<CurrentTurn>,
@@ -1385,6 +1448,7 @@ pub fn declare_kan(
     mut commands: Commands
 ) {
     for message in messages.read() {
+        if message.is_discard { continue; } // daiminkan handled in call window
         if lock.0 { return; }
 
         if let Ok((mut hand, mut open_mentsu, maybe_drawn)) = query.get_mut(message.player) {
@@ -1392,7 +1456,7 @@ pub fn declare_kan(
             let tile = &message.tile;
 
             // merge drawn into hand first so ankan with different drawn doesn't get sent into the shadow realm
-            if !message.is_discard && let Some(drawn) = maybe_drawn {
+            if let Some(drawn) = maybe_drawn {
                 hand.0.push(drawn.0);
                 commands.entity(message.player).remove::<DrawnTile>();
             }
@@ -1400,16 +1464,7 @@ pub fn declare_kan(
             let count = can_declare_kan_from_hand(&hand.0, tile);
             let mut kan_successful_type: Option<Kantsu> = None;
 
-            if message.is_discard && count == 3 {
-                open_mentsu.0.push(Mentsu::Daiminkan([*tile; 4]));
-                hand.0.retain(|x| x != tile);
-                commands.entity(tile_query.single().unwrap()).despawn();
-                commands.entity(message.player).remove::<ClosedHand>();
-                kan_successful_type = Some(Kantsu::Daiminkan);
-                game.pending_kan_dora = true;
-                game.pending_rinshan = true;
-            }
-            else if !message.is_discard && count == 4 {
+            if count == 4 {
                 open_mentsu.0.push(Mentsu::Ankan([*tile; 4]));
 
                 let new_dora = dead_wall.filler_tiles.remove(0);
@@ -1421,7 +1476,7 @@ pub fn declare_kan(
                 kan_successful_type = Some(Kantsu::Ankan);
                 game.pending_rinshan = true;
             }
-            else if !message.is_discard {
+            else {
                 for mentsu in &mut open_mentsu.0 {
                     if let Mentsu::Koutsu(tiles, false) = mentsu && tiles[0] == *tile {
                         *mentsu = Mentsu::Shouminkan([*tile; 4]);
@@ -1442,12 +1497,12 @@ pub fn declare_kan(
 
             match kan_successful_type {
                 Some(Kantsu::Ankan) => println!("{} declares Ankan on {:?}", message.player, tile),
-                Some(Kantsu::Daiminkan) => println!("{} declares Daiminkan on {:?}", message.player, tile),
                 Some(Kantsu::Shouminkan) => println!("{} declares Shouminkan on {:?}", message.player, tile),
-                None => println!("{} attempted Kan on {:?} but failed", message.player, tile),
+                None => println!("{} attempted closed Kan on {:?} but failed", message.player, tile),
+                _ => {}
             }
 
-            if kan_successful_type == Some(Kantsu::Ankan) || kan_successful_type == Some(Kantsu::Daiminkan)  {
+            if kan_successful_type == Some(Kantsu::Ankan) {
                 game.calls_made = true;
                 for player in ippatsu_query.iter() {
                     commands.entity(player).remove::<Ippatsu>();
@@ -1460,6 +1515,52 @@ pub fn declare_kan(
                 }
                 current_turn.0 = message.player;
                 next_state.set(TurnState::CallWindow);
+            }
+        }
+    }
+}
+
+
+// daiminkan
+pub fn declare_discarded_kan(
+    mut messages: MessageReader<DeclareKanMessage>,
+    mut query: Query<(&mut Hand, &mut OpenMentsu)>,
+    ippatsu_query: Query<Entity, With<Ippatsu>>,
+    discard_query: Single<&DiscardedBy, With<CurrentDiscard>>,
+    mut game: ResMut<GameState>,
+    mut current_turn: ResMut<CurrentTurn>,
+    mut next_state: ResMut<NextState<TurnState>>,
+    mut lock: ResMut<CallLock>,
+    mut commands: Commands
+) {
+    for message in messages.read() {
+        if !message.is_discard { continue; } // closed kan handled in main phase
+        if lock.0 { return; }
+
+        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player) {
+            lock.0 = true;
+            commands.entity(discard_query.0).insert(DiscardWasCalled);
+            let tile = &message.tile;
+
+            let count = can_declare_kan_from_hand(&hand.0, tile);
+
+            if count == 3 {
+                open_mentsu.0.push(Mentsu::Daiminkan([*tile; 4]));
+                hand.0.retain(|x| x != tile);
+                commands.entity(message.player).remove::<ClosedHand>();
+                game.pending_kan_dora = true;
+                game.pending_rinshan = true;
+
+                println!("{} declares Daiminkan on {:?}", message.player, tile);
+
+                game.calls_made = true;
+                for player in ippatsu_query.iter() {
+                    commands.entity(player).remove::<Ippatsu>();
+                }
+                current_turn.0 = message.player;
+                next_state.set(TurnState::RinshanDraw);
+            } else {
+                println!("{} attempted Daiminkan on {:?} but failed", message.player, tile);
             }
         }
     }
@@ -1705,28 +1806,16 @@ pub fn auto_advance_call_window(
         With<HumanPlayer>,
         Or<(With<RonOption>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>
     )>,
-    mut game: ResMut<GameState>,
     mut next_state: ResMut<NextState<TurnState>>,
-    tile_query: Query<(Entity, &DiscardedTile), With<CurrentDiscard>>,
-    furiten_check: Query<(Entity, &Tenpai)>,
-    mut commands: Commands,
     result: Option<Res<RoundResult>>,
     lock: Res<CallLock>,
+    game: Res<GameState>,
 ) {
     // wait for human input
     if !human_options.is_empty() || lock.0 || result.is_some() {
         return;
     }
 
-    if let Ok((discard_entity, discarded_tile)) = tile_query.single() {
-        for (player, tenpai) in &furiten_check {
-            if tenpai.0.contains(&discarded_tile.0) {
-                commands.entity(player).insert(Furiten);
-            }
-        }
-        commands.entity(discard_entity).despawn();
-    }
-    
     if game.pending_rinshan {
         println!("Call window passed, advancing to rinshan draw");
         next_state.set(TurnState::RinshanDraw);
@@ -1735,6 +1824,7 @@ pub fn auto_advance_call_window(
         next_state.set(TurnState::AdvanceTurn);
     }
 }
+
 
 
 pub fn start_round(

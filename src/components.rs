@@ -193,4 +193,7 @@ pub struct DrawnFromRinshan;
 #[derive(Component)]
 pub struct ForbiddenDiscard(pub Vec<Tile>);
 
+#[derive(Component)]
+pub struct DiscardWasCalled;
+
 
