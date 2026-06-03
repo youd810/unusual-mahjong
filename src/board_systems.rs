@@ -6,6 +6,7 @@ use crate::resources::*;
 use crate::messages::*;
 use crate::states::*;
 use crate::scoring::*;
+use crate::yaku::nagashi_mangan;
 use bevy::prelude::*;
 use rand::{RngExt, seq::SliceRandom};
 
@@ -375,6 +376,8 @@ pub fn bot_tilt_system(
 
 
 pub fn check_ryuukyoku(
+    query: Query<(Entity, &Kawa, Has<Oya>)>,
+    mut points_query: Query<(Entity, &mut Points, Has<Oya>)>,
     oya_tenpai_query: Single<Has<Tenpai>, With<Oya>>,
     wall: Res<Wall>,
     round_result: Option<Res<RoundResult>>,
@@ -387,6 +390,22 @@ pub fn check_ryuukyoku(
 
     if wall.0.is_empty() {
         println!("Ryuukyoku! Wall exhausted. Oya tenpai: {}", *oya_tenpai_query);
+        for (nagashi_candidate, kawa, is_candidate_oya) in query {
+            if nagashi_mangan(kawa) {
+                println!("{} Has achieved Nagashi Mangan!", nagashi_candidate);
+                for (player, mut points, is_oya) in points_query.iter_mut() {
+                    if nagashi_candidate != player && is_oya {
+                        points.0 -= 4000;
+                    } else if nagashi_candidate != player && !is_oya {
+                        if is_candidate_oya { points.0 -= 4000; } else { points.0 -= 2000; }
+                    } else if nagashi_candidate == player && is_oya {
+                        points.0 += 12000;
+                    } else if nagashi_candidate == player && !is_oya {
+                        points.0 += 8000;
+                    }
+                }
+            }
+        }
         if *oya_tenpai_query {
             commands.insert_resource(RoundResult(RoundEndReason::RyuukyokuOyaTenpai));
         } else {
@@ -480,6 +499,8 @@ pub fn declare_ron(
     // TODO: consider the possibility of ai not declaring a ron
     // TODO: OR add a human confirmation because humans are slow and would be too late to call ron on multiple ron against ais
 
+    if !undecided.is_empty() { return; }
+    
     // automatically transitions to the next phase
     let mut winners: Vec<_> = declared.iter().collect();
     if winners.is_empty() { 
@@ -1362,49 +1383,47 @@ pub fn declare_kan(
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
     mut commands: Commands
-) { 
+) {
     for message in messages.read() {
-        if lock.0 { 
-            return; 
-        } 
+        if lock.0 { return; }
 
-        if let Ok((mut hand, mut open_mentsu, maybe_drawn)) = query.get_mut(message.player){
+        if let Ok((mut hand, mut open_mentsu, maybe_drawn)) = query.get_mut(message.player) {
             lock.0 = true;
             let tile = &message.tile;
-            let mut full_hand = hand.0.to_owned();
-            if let Some(drawn) = maybe_drawn {
-                full_hand.push(drawn.0);
-            }
-            let count = can_declare_kan_from_hand(&full_hand, tile);
-            let mut kan_successful_type: Option<Kantsu> = None;
 
+            // merge drawn into hand first so ankan with different drawn doesn't get sent into the shadow realm
+            if !message.is_discard && let Some(drawn) = maybe_drawn {
+                hand.0.push(drawn.0);
+                commands.entity(message.player).remove::<DrawnTile>();
+            }
+
+            let count = can_declare_kan_from_hand(&hand.0, tile);
+            let mut kan_successful_type: Option<Kantsu> = None;
 
             if message.is_discard && count == 3 {
                 open_mentsu.0.push(Mentsu::Daiminkan([*tile; 4]));
                 hand.0.retain(|x| x != tile);
-                commands.entity(tile_query.single().unwrap()).despawn(); 
-                commands.entity(message.player).remove::<ClosedHand>(); 
+                commands.entity(tile_query.single().unwrap()).despawn();
+                commands.entity(message.player).remove::<ClosedHand>();
                 kan_successful_type = Some(Kantsu::Daiminkan);
                 game.pending_kan_dora = true;
                 game.pending_rinshan = true;
-            } 
-
+            }
             else if !message.is_discard && count == 4 {
                 open_mentsu.0.push(Mentsu::Ankan([*tile; 4]));
-                // dora flipping timing 
+
                 let new_dora = dead_wall.filler_tiles.remove(0);
                 let new_ura =  dead_wall.filler_tiles.remove(0);
                 dead_wall.dora_indicators.push(new_dora);
                 dead_wall.ura_indicators.push(new_ura);
+
                 hand.0.retain(|x| x != tile);
                 kan_successful_type = Some(Kantsu::Ankan);
                 game.pending_rinshan = true;
-            }  
-
-            else if !message.is_discard { // this check should be enough hopefully
+            }
+            else if !message.is_discard {
                 for mentsu in &mut open_mentsu.0 {
                     if let Mentsu::Koutsu(tiles, false) = mentsu && tiles[0] == *tile {
-                        // deref to mutate
                         *mentsu = Mentsu::Shouminkan([*tile; 4]);
                         hand.0.retain(|x| x != tile);
                         kan_successful_type = Some(Kantsu::Shouminkan);
@@ -1417,7 +1436,7 @@ pub fn declare_kan(
                             Chankan,
                         ));
                         break;
-                    } 
+                    }
                 }
             }
 
@@ -1435,14 +1454,12 @@ pub fn declare_kan(
                 }
                 current_turn.0 = message.player;
                 next_state.set(TurnState::RinshanDraw);
-                // timer.0.reset();
             } else if kan_successful_type == Some(Kantsu::Shouminkan) {
                 for player in ippatsu_query.iter() {
                     commands.entity(player).remove::<Ippatsu>();
                 }
                 current_turn.0 = message.player;
                 next_state.set(TurnState::CallWindow);
-                // timer.0.reset();
             }
         }
     }

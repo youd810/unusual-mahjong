@@ -47,7 +47,7 @@ impl BotProfile {
             cheat_tendency: 0.2,
             speed: 0.4,
             read: 0.5,
-            emotional_invulnerability: 0.4,
+            emotional_invulnerability: 0.5,
             composure: 1.0,
         }
     }
@@ -58,7 +58,7 @@ impl BotProfile {
             cheat_tendency: 0.1,
             speed: 0.3,
             read: 0.3,
-            emotional_invulnerability   : 0.2,
+            emotional_invulnerability: 0.2,
             composure: 1.0,
         }
     }

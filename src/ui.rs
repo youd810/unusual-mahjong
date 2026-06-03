@@ -770,6 +770,17 @@ pub fn debug_ui_system(
                     ];
                     apply_debug_hand(player, hand, Tile::Man(3), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
+
+                // sankantsu
+                if ui.button("Sankantsu").clicked() {
+                    let hand = vec![
+                        Tile::Man(1), Tile::Man(1), Tile::Man(1), Tile::Man(1),
+                        Tile::Pin(1), Tile::Pin(1), Tile::Pin(1), Tile::Pin(1),
+                        Tile::Sou(1), Tile::Sou(1), Tile::Sou(1), Tile::Sou(1),
+                        Tile::Man(9)
+                    ];
+                    apply_debug_hand(player, hand, Tile::Man(9), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+                }
             });
 
             ui.separator();

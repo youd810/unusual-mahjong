@@ -373,3 +373,7 @@ pub fn tenhou(kawa: &Kawa, is_oya: bool, is_tsumo: bool, calls_made: bool) -> bo
 pub fn chiihou(kawa: &Kawa, is_oya: bool, is_tsumo: bool, calls_made: bool) -> bool {
     kawa.0.is_empty() && !is_oya && is_tsumo && !calls_made
 } 
+
+pub fn nagashi_mangan(kawa: &Kawa) -> bool {
+    kawa.0.iter().all(is_yaochuuhai)
+}

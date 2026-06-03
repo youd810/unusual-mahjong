@@ -25,24 +25,17 @@ pub fn bot_discard_system(
         }
 
         let mut visible_tiles = [0; 34];
+        let mut threat_discards = vec![];
         let mut safe_tiles = vec![];
         let mut is_threat = false;
         let mut rng = rand::rng();
 
-        // using composure as a stat penalty
-        let effective_read = ((profile.read * profile.composure).max(profile.read - 0.3)).max(0.1);
-        let effective_aggressiveness = ((profile.aggressiveness * profile.composure).max(profile.aggressiveness - 0.3)).max(0.1);
+        // using composure as a stat penalty 
+        let effective_read = ((profile.read * profile.composure).max(profile.read - 0.2)).max(0.2);
+        let effective_aggressiveness = ((profile.aggressiveness * profile.composure).max(profile.aggressiveness - 0.2)).max(0.2);
 
+        // check visible tiles and identify threats
         for (entity, open, kawa, is_riichi) in visible_query.iter() {
-            if is_riichi || open.0.len() >= 3 {
-                is_threat = true;
-                for tile in kawa.0.iter() {
-                    if rng.random::<f32>() <= effective_read {
-                        safe_tiles.push(*tile);
-                    }
-                }
-            }
-
             // skip own open mentsu (calculated in `evaluate_discard`)
             if entity != player {
                 for mentsu in open.0.iter() {
@@ -54,20 +47,60 @@ pub fn bot_discard_system(
             for tile in kawa.0.iter() {
                 visible_tiles[tile_to_index(tile)] += 1;
             }
+
+            if is_riichi || open.0.len() >= 3 {
+                is_threat = true;
+                threat_discards.extend(kawa.0.clone());
+            }
         }
 
         for tile in dead_wall.dora_indicators.iter() {
             visible_tiles[tile_to_index(tile)] += 1;
         }
 
-        // ! should this be a betaori flag instead?
         let mut should_defend = false;
+
         if is_threat {
             let panic_threshold = profile.composure + (effective_aggressiveness * 0.20);
             let panic = rng.random::<f32>() > panic_threshold;
 
             let current_shanten = calculate_shanten(&combine_tiles(&hand_plus_drawn, &open_mentsu.0));
             should_defend = panic || current_shanten > 1;
+
+            // genbutsu 
+            for tile in &threat_discards {
+                if rng.random::<f32>() <= effective_read + 0.1 { // base addition
+                    safe_tiles.push(*tile);
+                }
+            }
+
+            // dead honors (3+ visible)
+            for i in 27..34 {
+                if visible_tiles[i] >= 3 {
+                    let honor_tile = index_to_tile(i);
+                    if rng.random::<f32>() <= effective_read + 0.1 {
+                        safe_tiles.push(honor_tile);
+                    }
+                }
+            }
+
+            // suji defense
+            if effective_read >= 0.5 {
+                for tile in &threat_discards {
+                    match tile {
+                        Tile::Man(4) => { safe_tiles.push(Tile::Man(1)); safe_tiles.push(Tile::Man(7)); }
+                        Tile::Man(5) => { safe_tiles.push(Tile::Man(2)); safe_tiles.push(Tile::Man(8)); }
+                        Tile::Man(6) => { safe_tiles.push(Tile::Man(3)); safe_tiles.push(Tile::Man(9)); }
+                        Tile::Pin(4) => { safe_tiles.push(Tile::Pin(1)); safe_tiles.push(Tile::Pin(7)); }
+                        Tile::Pin(5) => { safe_tiles.push(Tile::Pin(2)); safe_tiles.push(Tile::Pin(8)); }
+                        Tile::Pin(6) => { safe_tiles.push(Tile::Pin(3)); safe_tiles.push(Tile::Pin(9)); }
+                        Tile::Sou(4) => { safe_tiles.push(Tile::Sou(1)); safe_tiles.push(Tile::Sou(7)); }
+                        Tile::Sou(5) => { safe_tiles.push(Tile::Sou(2)); safe_tiles.push(Tile::Sou(8)); }
+                        Tile::Sou(6) => { safe_tiles.push(Tile::Sou(3)); safe_tiles.push(Tile::Sou(9)); }
+                        _ => {}
+                    }
+                }
+            }
         }
 
         let forbidden_slice = maybe_forbidden.map(|f| f.0.as_slice());
@@ -87,23 +120,13 @@ pub fn bot_discard_system(
 }
 
 
+// TODO: needs testing
 pub fn bot_call_system(
     query: Query<(
-        Entity,
-        &BotProfile,
-        &Hand,
-        &OpenMentsu,
-        &Jikaze,
-        Option<&RonOption>,
-        Option<&PonOption>,
-        Option<&ChiOption>,
-        Option<&DaiminkanOption>,
-    ),
-    Without<HumanPlayer>>,
-    human_options: Query<(), (
-        With<HumanPlayer>,
-        Or<(With<RonOption>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>
-    )>,
+        Entity, &BotProfile, &Hand, &OpenMentsu, &Jikaze,
+        Option<&RonOption>, Option<&PonOption>, Option<&ChiOption>, Option<&DaiminkanOption>,
+    ), Without<HumanPlayer>>,
+    human_options: Query<(), (With<HumanPlayer>, Or<(With<RonOption>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>)>,
     game: Res<GameState>,
     dead_wall: Res<DeadWall>,
     mut pon_writer: MessageWriter<DeclarePonMessage>,
@@ -115,103 +138,107 @@ pub fn bot_call_system(
 ) {
     let human_is_deciding = !human_options.is_empty();
 
-    for (player, profile, hand, open_mentsu, jikaze, ron, pon, chi, kan) in query {
-
-        if ron.is_none() && pon.is_none() && chi.is_none() && kan.is_none() {
-            continue;
-        } else if ron.is_some() {
-            commands.entity(player).insert(RonDeclared);
-            continue;
-        }
-
+    for (player, profile, hand, open_mentsu, jikaze, ron, pon, chi, kan) in query.iter() {
+        if ron.is_none() && pon.is_none() && chi.is_none() && kan.is_none() { continue; }
+        if ron.is_some() { commands.entity(player).insert(RonDeclared); continue; }
         if human_is_deciding { continue; }
 
-        let mut combined_hand = combine_tiles(&hand.0, &open_mentsu.0);
-        let pre_call_shanten = calculate_shanten(&combined_hand);
-        
-        combined_hand.push(discard_query.0);
-        let post_call_shanten = calculate_shanten(&combined_hand);
+        let pre_shanten = calculate_shanten(&combine_tiles(&hand.0, &open_mentsu.0));
 
-        let yaku_han = estimate_yaku_han(&combined_hand, &jikaze.0, &game.bakaze);
-        let has_yaku_path = yaku_han > 0;
+        // scores a simulated post-call hand (now returns a 4-tuple to isolate dora)
+        let score = |hand_tiles: &[Tile], open: &[Mentsu]| -> (i32, i32, i32, i32) {
+            let combined = combine_tiles(hand_tiles, open);
+            let mut freq = tiles_to_frequency_array(&combined);
+            let shanten = calculate_shanten_from_array(&mut freq);
+            let ukeire = ukeire_tiles(&mut freq, shanten).len() as i32;
+            let han = estimate_yaku_han(&combined, &jikaze.0, &game.bakaze) as i32;
+            let dora = count_dora(&combined, &*dead_wall, false).dora as i32;
+            (han, -shanten, ukeire, dora)
+        };
 
-        let dora_count = count_dora(&combined_hand, &*dead_wall, false).dora;
-        let total_estimated_han = yaku_han + dora_count;
+        // candidates: (score, action_index)
+        // 0 = kan, 1 = pon, 2+ = chi at positions[idx - 2]
+        let mut candidates: Vec<((i32, i32, i32, i32), usize)> = Vec::new();
 
-        // scale aggressiveness drastically based on estimated han value
-        let value_multiplier = 1.0 + (total_estimated_han as f32 * 0.3);
+        if let Some(k) = kan {
+            let mut temp_hand = hand.0.clone();
+            temp_hand.retain(|t| *t != k.0);
+            let mut temp_open = open_mentsu.0.clone();
+            temp_open.push(Mentsu::Daiminkan([k.0; 4]));
+            candidates.push((score(&temp_hand, &temp_open), 0));
+        }
 
-        // ! consider adding composure into the equation (that makes aggressivenes and speed higher)
-        let shanten_chance = (profile.aggressiveness * value_multiplier / (post_call_shanten as f32 + 1.0)) * profile.speed;
-        let dora_chance = (profile.speed * value_multiplier) + (dora_count as f32 * 0.25);
+        if let Some(p) = pon {
+            let mut temp_hand = Hand(hand.0.clone());
+            for _ in 0..2 { temp_hand.remove_tile_from_hand(&p.0); }
+            let mut temp_open = open_mentsu.0.clone();
+            temp_open.push(Mentsu::Koutsu([p.0; 3], false));
+            candidates.push((score(&temp_hand.0, &temp_open), 1));
+        }
+
+        if let Some(c) = chi {
+            for (i, &pos) in c.positions.iter().enumerate() {
+                let (first, second, shuntsu_array) = match pos {
+                    ChiTilePos::Left => {
+                        let next = next_tile_sequence(&c.tile).unwrap();
+                        let next_next = next_tile_sequence(&next).unwrap();
+                        (next, next_next, [c.tile, next, next_next])
+                    },
+                    ChiTilePos::Middle => {
+                        let prev = previous_tile_sequence(&c.tile).unwrap();
+                        let next = next_tile_sequence(&c.tile).unwrap();
+                        (prev, next,[prev, c.tile, next])
+                    },
+                    ChiTilePos::Right => {
+                        let prev = previous_tile_sequence(&c.tile).unwrap();
+                        let prev_prev = previous_tile_sequence(&prev).unwrap();
+                        (prev_prev, prev, [prev_prev, prev, c.tile])
+                    },
+                };
+                let mut temp_hand = Hand(hand.0.clone());
+                temp_hand.remove_tile_from_hand(&first);
+                temp_hand.remove_tile_from_hand(&second);
+                let mut temp_open = open_mentsu.0.clone();
+                temp_open.push(Mentsu::Shuntsu(shuntsu_array, false));
+                candidates.push((score(&temp_hand.0, &temp_open), 2 + i));
+            }
+        }
+
+        let Some(&(best_score, best_idx)) = candidates.iter().max_by_key(|(s, _)| *s) else { continue };
+        let (best_han, neg_shanten, _, best_dora) = best_score;
+        let post_shanten = -neg_shanten;
 
         let mut rng = rand::rng();
-        if pre_call_shanten >= post_call_shanten && has_yaku_path && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance) {
-            if let Some(k) = kan {
-                kan_writer.write(DeclareKanMessage { player, tile: k.0, is_discard: true });
-            } else if let Some(p) = pon {
-                pon_writer.write(DeclarePonMessage { player, tile: p.0 });  
-            } else if let Some(c) = chi {
-                let mut best_pos = c.positions[0];
-                let mut best_score = (i32::MIN, -1, -1);
 
-                for &pos in c.positions.iter() {
-                    let (t1, t2, shuntsu_array) = match pos {
-                        ChiTilePos::Left => {
-                            let next = next_tile_sequence(&c.tile).unwrap();
-                            let next_next = next_tile_sequence(&next).unwrap();
-                            (next, next_next, [c.tile, next, next_next])
-                        },
-                        ChiTilePos::Middle => {
-                            let prev = previous_tile_sequence(&c.tile).unwrap();
-                            let next = next_tile_sequence(&c.tile).unwrap();
-                            (prev, next,[prev, c.tile, next])
-                        },
-                        ChiTilePos::Right => {
-                            let prev = previous_tile_sequence(&c.tile).unwrap();
-                            let prev_prev = previous_tile_sequence(&prev).unwrap();
-                            (prev_prev, prev, [prev_prev, prev, c.tile])
-                        },
-                    };
+        // scale aggressiveness drastically based on estimated han value
+        let total_estimated_han = best_han + best_dora;
+        let value_multiplier = 1.0 + (total_estimated_han as f32 * 0.2);
 
-                    let mut temp_hand = Hand(hand.0.clone());
-                    temp_hand.remove_tile_from_hand(&t1);
-                    temp_hand.remove_tile_from_hand(&t2);
+        // ! consider adding composure into the equation (that makes aggressivenes and speed higher)
+        let shanten_chance = (profile.aggressiveness * value_multiplier / (post_shanten as f32 + 1.0)) * profile.speed;
+        let dora_chance = (profile.speed * value_multiplier) + (best_dora as f32 * 0.25);
 
-                    let mut temp_open = open_mentsu.0.clone();
-                    temp_open.push(Mentsu::Shuntsu(shuntsu_array, false));
-
-                    let combined = combine_tiles(&temp_hand.0, &temp_open);
-                    let mut freq = tiles_to_frequency_array(&combined);
-                    let current_shanten = calculate_shanten_from_array(&mut freq);
-
-                    let current_ukeire = ukeire_tiles(&mut freq, current_shanten).len() as i32;
-                    let current_dora = count_dora(&combined, &*dead_wall, false).dora as i32;
-
-                    let current_score = (-current_shanten, current_ukeire, current_dora);
-
-                    if current_score > best_score {
-                        best_score = current_score;
-                        best_pos = pos;
-                    }
+        if pre_shanten >= post_shanten && best_han > 0 && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance) {
+            match best_idx {
+                0 => { kan_writer.write(DeclareKanMessage { player, tile: discard_query.0, is_discard: true }); },
+                1 => { pon_writer.write(DeclarePonMessage { player, tile: discard_query.0 }); },
+                _ => {
+                    let c = chi.unwrap();
+                    chi_writer.write(DeclareChiMessage {
+                        player, tile: c.tile, pos: c.positions[best_idx - 2], discarded_by: discarded_by.0,
+                    });
                 }
-
-                chi_writer.write(DeclareChiMessage {
-                    player,
-                    tile: c.tile,
-                    pos: best_pos,
-                    discarded_by: discarded_by.0,
-                });
             }
-        } else {
-            if kan.is_some() { commands.entity(player).remove::<DaiminkanOption>(); }
-            if pon.is_some() { commands.entity(player).remove::<PonOption>(); }
-            if chi.is_some() { commands.entity(player).remove::<ChiOption>(); }
-        }   
-    
+        }
+        
+        if kan.is_some() { commands.entity(player).remove::<DaiminkanOption>(); }
+        if pon.is_some() { commands.entity(player).remove::<PonOption>(); }
+        if chi.is_some() { commands.entity(player).remove::<ChiOption>(); }
     }
 }
 
+
+// ! unused
 pub fn bot_main_phase_system(
     query: Query<(
         Entity,
@@ -220,34 +247,76 @@ pub fn bot_main_phase_system(
         Option<&AnkanOption>,
         Option<&ShouminkanOption>,
         Option<&KyuushuOption>,
+        Option<&Hand>,       
+        Option<&DrawnTile>,  
+        Option<&BotProfile>, 
     ), Without<HumanPlayer>>,
+    visible_query: Query<(Entity, Has<Riichi>)>,
     mut tsumo_writer: MessageWriter<DeclareTsumoMessage>,
     mut kan_writer: MessageWriter<DeclareKanMessage>,
     mut kyuushu_writer: MessageWriter<DeclareKyuushuMessage>,
     mut commands: Commands,
 ) {
-     for (player, tsumo, riichi, ankan, shouminkan, kyuushu) in &query {
+     for (player, tsumo, riichi, ankan, shouminkan, kyuushu, hand_opt, drawn_opt, profile_opt) in &query {
 
         if tsumo.is_none() && riichi.is_none() && ankan.is_none() && shouminkan.is_none() && kyuushu.is_none() {
             continue;
         }
-        
+
         if let Some(t) = tsumo {
             tsumo_writer.write(DeclareTsumoMessage { player, result: t.result.to_owned() });
+            commands.entity(player).remove::<TsumoOption>();
             break;
         }
 
-        if riichi.is_some() {
-            commands.entity(player).insert(RiichiSelecting);
-        } else if let Some(a) = ankan {
+        if let Some(r) = riichi {
+            let mut should_riichi = true;
+
+            if let (Some(hand), Some(drawn), Some(profile)) = (hand_opt, drawn_opt, profile_opt) {
+                let mut full_hand = hand.0.clone();
+                full_hand.push(drawn.0);
+
+                // calculate best wait quality
+                let mut max_wait_types = 0;
+                for discard in &r.0 {
+                    let mut temp = full_hand.clone();
+                    if let Some(pos) = temp.iter().position(|x| *x == *discard) {
+                        temp.remove(pos);
+                    }
+                    let waits = check_tenpai(&temp);
+                    max_wait_types = max_wait_types.max(waits.len());
+                }
+
+                // check board danger
+                let someone_riichi = visible_query.iter().any(|(e, is_riichi)| e != player && is_riichi);
+
+                // discourage lower opt wait
+                if max_wait_types <= 1 {
+                    if someone_riichi && profile.aggressiveness < 0.7 {
+                        should_riichi = false; // damaten
+                    } else if profile.aggressiveness < 0.5 {
+                        should_riichi = false; // tegawari
+                    }
+                }
+            }
+
+            if should_riichi {
+                commands.entity(player).insert(RiichiSelecting);
+                commands.entity(player).insert(RiichiSelecting).remove::<RiichiOption>();
+            }
+        }
+        else if let Some(a) = ankan {
             kan_writer.write(DeclareKanMessage { player, tile: a.0[0], is_discard: false });
+            commands.entity(player).remove::<AnkanOption>();
         } else if let Some(s) = shouminkan {
             kan_writer.write(DeclareKanMessage { player, tile: s.0[0], is_discard: false });
+            commands.entity(player).remove::<ShouminkanOption>();
         } else if kyuushu.is_some() {
             kyuushu_writer.write(DeclareKyuushuMessage { player });
+            commands.entity(player).remove::<KyuushuOption>();
         }
 
-    } 
+    }
 }
 
 
@@ -429,11 +498,12 @@ pub fn bot_accusation_decision_system(
         if detected_tampering.is_empty() { continue; }
 
         // weigh read to get confidence
+        // TODO: confidence needs to be lowered a bit
         let (suspect, confidence) = if rng.random::<f32>() < profile.read {
             let suspect = cheat_log.0.iter()
                 .find(|e| detected_tampering.contains(&e.target_kawa))
                 .map(|e| e.cheater);
-            (suspect, 0.9)
+            (suspect, 0.8) // prev: 0.9
         } else {
             let others: Vec<Entity> = all_alive.iter()
                 .filter(|(e, _)| *e != bot_entity)

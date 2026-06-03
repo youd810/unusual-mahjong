@@ -79,6 +79,7 @@ fn main() {
             declare_riichi,
             declare_kyuushu,
             declare_kan,
+            bot_main_phase_system,
             bot_discard_system,
             discard_tile,
         ).run_if(in_state(TurnState::MainPhase))
