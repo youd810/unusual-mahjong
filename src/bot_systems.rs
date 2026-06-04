@@ -7,13 +7,24 @@ use crate::components::*;
 use crate::resources::*;
 use crate::messages::*;
 
+
+
 // TODO: make bots more assertive to yakuhai calls (or just call in general) if their hand already has other yaku
 
 pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
-    query: Query<(Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, &BotProfile, Has<RiichiSelecting>, Option<&ForbiddenDiscard>), Without<HumanPlayer>>,
+    query: Query<(
+        Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, &BotProfile, Has<RiichiSelecting>, Option<&ForbiddenDiscard>
+    ), (
+        Without<HumanPlayer>,
+        Without<TsumoOption>,
+        Without<AnkanOption>,
+        Without<ShouminkanOption>,
+        Without<KyuushuOption>
+    )>,
     visible_query: Query<(Entity, &OpenMentsu, &Kawa, Has<Riichi>)>,
     dead_wall: Res<DeadWall>,
+    revolver: Res<Revolver>,
     mut messages: MessageWriter<DiscardTileMessage>,
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
     mut commands: Commands,
@@ -104,7 +115,14 @@ pub fn bot_discard_system(
         }
 
         let forbidden_slice = maybe_forbidden.map(|f| f.0.as_slice());
-        let discard = evaluate_discard(&hand_plus_drawn, &open_mentsu.0, &visible_tiles, &safe_tiles, should_defend, forbidden_slice);
+        let target_yaku = determine_bot_strategy(&hand_plus_drawn, revolver.chamber, profile);
+
+        let discard = evaluate_discard(
+            &hand_plus_drawn, &open_mentsu.0,
+            &visible_tiles, &safe_tiles,
+            should_defend, forbidden_slice,
+            target_yaku
+        );
 
         if is_selecting {
             riichi_writer.write(DeclareRiichiMessage { player, tile: discard });
@@ -120,7 +138,60 @@ pub fn bot_discard_system(
 }
 
 
+// TODO: Add chanta/junchan, ryankantsu, san/suuankou, pinfu, sanshoku
+pub fn determine_bot_strategy(hand: &[Tile], revolver_chamber: u8, profile: &BotProfile) -> TargetYaku {
+    let death_risk = 1.0 / (7.0 - revolver_chamber as f32);
+    let refuses_cheap_win = death_risk > (profile.aggressiveness * profile.composure);
+
+    let mut freq = [0u8; 34];
+    for tile in hand {
+        freq[tile_to_index(tile)] += 1;
+    }
+
+    let man_count: u8 = (0..9).map(|i| freq[i]).sum();
+    let pin_count: u8 = (9..18).map(|i| freq[i]).sum();
+    let sou_count: u8 = (18..27).map(|i| freq[i]).sum();
+    let honor_count: u8 = (27..34).map(|i| freq[i]).sum();
+    let pairs = freq.iter().filter(|&&f| f >= 2).count();
+
+    // count unique orphans for kokushi
+    let mut unique_yaochuuhai = 0;
+    const YAOCHUUHAI_POS: [usize; 13] =[0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33];
+    for &i in YAOCHUUHAI_POS.iter() {
+        if freq[i] > 0 { unique_yaochuuhai += 1; }
+    }
+
+    // 1. kokushi musou
+    if unique_yaochuuhai >= 9 { return TargetYaku::Kokushi; }
+
+    // 2. chinitsu
+    if man_count >= 10 { return TargetYaku::Chinitsu(Suit::Man); }
+    if pin_count >= 10 { return TargetYaku::Chinitsu(Suit::Pin); }
+    if sou_count >= 10 { return TargetYaku::Chinitsu(Suit::Sou); }
+
+    // 3. honitsu
+    if man_count + honor_count >= 9 { return TargetYaku::Honitsu(Suit::Man); }
+    if pin_count + honor_count >= 9 { return TargetYaku::Honitsu(Suit::Pin); }
+    if sou_count + honor_count >= 9 { return TargetYaku::Honitsu(Suit::Sou); }
+
+    // 4. pairs (chiitoitsu / toitoi)
+    if pairs >= 4 { return TargetYaku::Pairs; } // raised to 4 to avoid premature pair locking
+
+    // 5. tanyao
+    let middle_tiles = hand.iter().filter(|t| !is_yaochuuhai(t)).count() as u8;
+    if middle_tiles >= 9 { return TargetYaku::Tanyao; }
+
+    // 6. fallback
+    if refuses_cheap_win {
+        TargetYaku::Tanyao
+    } else {
+        TargetYaku::Speed
+    }
+}
+
+
 // TODO: needs testing
+// also make this scale with bullet
 pub fn bot_call_system(
     query: Query<(
         Entity, &BotProfile, &Hand, &OpenMentsu, &Jikaze,
@@ -134,6 +205,7 @@ pub fn bot_call_system(
     )>,
     game: Res<GameState>,
     dead_wall: Res<DeadWall>,
+    revolver: Res<Revolver>,
     mut commands: Commands,
 ) {
     for (player, profile, hand, open_mentsu, jikaze, ron, pon, chi, kan) in query.iter() {
@@ -224,17 +296,21 @@ pub fn bot_call_system(
         let (best_han, neg_shanten, _, best_dora) = best_score;
         let post_shanten = -neg_shanten;
 
+        let death_risk = 1.0 / (7.0 - revolver.chamber as f32);
+        let refuses_cheap_win = death_risk > (profile.aggressiveness * profile.composure);
+
         let mut rng = rand::rng();
 
         // scale aggressiveness drastically based on estimated han value
         let total_estimated_han = best_han + best_dora;
         let value_multiplier = 1.0 + (total_estimated_han as f32 * 0.2);
 
-        // ! consider adding composure into the equation (that makes aggressivenes and speed higher)
         let shanten_chance = (profile.aggressiveness * value_multiplier / (post_shanten as f32 + 1.0)) * profile.speed;
         let dora_chance = (profile.speed * value_multiplier) + (best_dora as f32 * 0.25);
+        
+        let is_cheap_and_risky = refuses_cheap_win && total_estimated_han < 2;
 
-        if pre_shanten >= post_shanten && best_han > 0 && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance) {
+        if !is_cheap_and_risky && pre_shanten >= post_shanten && best_han > 0 && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance) {
             match best_idx {
                 0 => {
                     commands.entity(player)

@@ -788,7 +788,7 @@ pub fn debug_ui_system(
                     apply_debug_hand(player, hand, Tile::Man(9), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
 
-                if ui.button("Test Call Priority Fix").clicked() {
+                if ui.button("Call Priority Test").clicked() {
                     let mut human_entity = Entity::PLACEHOLDER;
                     let mut bot_entity = Entity::PLACEHOLDER;
 

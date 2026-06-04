@@ -64,6 +64,24 @@ impl BotProfile {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Suit { Man, Pin, Sou }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetYaku {
+    Speed,
+    Tanyao,
+    Honitsu(Suit),
+    Chinitsu(Suit),
+    Pairs,
+    Kokushi,
+}
+
+#[derive(Component)]
+pub struct BotStrategy {
+    pub target: TargetYaku,
+}
+
 #[derive(Component)]
 pub struct BotCheatIntent {
     pub execute_at: f32,
@@ -205,6 +223,7 @@ pub struct DaiminkanDeclared;
 
 #[derive(Component)]
 pub struct ChiDeclared(pub ChiTilePos);
+
 
 
 

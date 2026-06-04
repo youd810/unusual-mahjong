@@ -377,6 +377,46 @@ pub fn index_to_tile(index: usize) -> Tile {
     }
 }
 
+
+pub fn get_discard_penalty(tile: &Tile, target: &TargetYaku, freq: u8) -> i32 {
+    let is_honor = matches!(tile, Tile::Honor(_));
+    let is_terminal = matches!(tile, Tile::Man(1|9) | Tile::Pin(1|9) | Tile::Sou(1|9));
+    let is_yaochuuhai = is_honor || is_terminal;
+
+    // a massive penalty acts as +10 shanten, forcing the bot to keep the tile
+    match target {
+        TargetYaku::Speed => 0,
+        TargetYaku::Tanyao => {
+            if !is_yaochuuhai { 10000 } else { 0 }
+        }
+        TargetYaku::Honitsu(target_suit) => {
+            let matches_suit = match (tile, target_suit) {
+                (Tile::Man(_), Suit::Man) => true,
+                (Tile::Pin(_), Suit::Pin) => true,
+                (Tile::Sou(_), Suit::Sou) => true,
+                _ => false,
+            };
+            if matches_suit || is_honor { 10000 } else { 0 }
+        }
+        TargetYaku::Chinitsu(target_suit) => {
+            let matches_suit = match (tile, target_suit) {
+                (Tile::Man(_), Suit::Man) => true,
+                (Tile::Pin(_), Suit::Pin) => true,
+                (Tile::Sou(_), Suit::Sou) => true,
+                _ => false,
+            };
+            if matches_suit { 10000 } else { 0 }
+        }
+        TargetYaku::Pairs => {
+            if freq >= 2 { 10000 } else { 0 }
+        }
+        TargetYaku::Kokushi => {
+            if is_yaochuuhai && freq == 1 { 10000 } else { 0 }
+        }
+    }
+}
+
+
 pub fn evaluate_discard(
     hand_plus_drawn: &[Tile],
     open_mentsu: &Vec<Mentsu>,
@@ -384,8 +424,9 @@ pub fn evaluate_discard(
     safe_tiles: &[Tile],
     should_defend: bool,
     forbidden: Option<&[Tile]>,
+    target_yaku: TargetYaku,
 ) -> Tile {
-    let mut safe_map = [0; 34];
+    let mut safe_map =[0; 34];
     let mut has_safe_tiles = false;
 
     for tile in safe_tiles {
@@ -397,9 +438,9 @@ pub fn evaluate_discard(
 
     let combined_hand = combine_tiles(hand_plus_drawn, open_mentsu);
     let mut freq_array = tiles_to_frequency_array(&combined_hand);
+
     let mut best_index = 0;
-    let mut lowest_shanten = 8;
-    let mut max_ukeire_count = 0;
+    let mut best_score = i32::MAX;
     let mut found_valid = false;
 
     for i in 0..34 {
@@ -409,10 +450,7 @@ pub fn evaluate_discard(
             continue;
         }
 
-        // ignores kuikae
-        if let Some(f) = forbidden && f.contains(&current_tile) { 
-            continue; 
-        }
+        if let Some(f) = forbidden && f.contains(&current_tile) { continue; }
 
         if has_safe_tiles && safe_map[i] == 0 && should_defend {
             continue;
@@ -420,31 +458,36 @@ pub fn evaluate_discard(
 
         found_valid = true;
 
+        let original_freq = freq_array[i];
         freq_array[i] -= 1;
         let shanten = calculate_shanten_from_array(&mut freq_array);
+        let ukeire = ukeire_tiles(&mut freq_array, shanten);
+        let ukeire_count: i32 = ukeire.iter()
+            .map(|&j| 4i32.saturating_sub(freq_array[j] as i32).saturating_sub(visible_tiles[j] as i32).max(0))
+            .sum();
 
-        if shanten <= lowest_shanten {
-            let ukeire = ukeire_tiles(&mut freq_array, shanten);
-            let ukeire_count: u8 = ukeire.iter()
-                .map(|&j| 4u8.saturating_sub(freq_array[j]).saturating_sub(visible_tiles[j]))
-                .sum();
-
-            if shanten < lowest_shanten || (shanten == lowest_shanten && ukeire_count > max_ukeire_count) {
-                best_index = i;
-                lowest_shanten = shanten;
-                max_ukeire_count = ukeire_count;
-            }
+        // defense overrides target logic entirely
+        let penalty = if should_defend {
+            0
+        } else {
+            get_discard_penalty(&current_tile, &target_yaku, original_freq)
         };
+
+        // shanten is scaled by 1000 so it dominates ukeire (which can go to tens or hundreds)
+        // lower is better
+        let score = (shanten * 1000) - ukeire_count + penalty;
+
+        if score < best_score {
+            best_score = score;
+            best_index = i;
+        }
 
         freq_array[i] += 1;
     }
 
-    // fallback if no valid after kuikae filter
     if !found_valid {
         for tile in hand_plus_drawn {
-            if let Some(f) = forbidden {
-                if f.contains(tile) { continue; }
-            }
+            if let Some(f) = forbidden && f.contains(tile) { continue; }
             return *tile;
         }
     }
