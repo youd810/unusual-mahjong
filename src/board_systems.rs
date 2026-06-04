@@ -1171,46 +1171,58 @@ pub fn pon_check(
 // ! IT'D LOOK LIKE THERE ARE MORE THAN 4 TILES FOR EACH TYPE, BUT JUST IGNORE THIS FOR NOW
 // ! THIS APPLIES TO CHI AND KAN AS WELL
 pub fn declare_pon(
-    mut messages: MessageReader<DeclarePonMessage>,
+    declared: Query<(Entity, &PonOption), With<PonDeclared>>,
+    undecided: Query<(), (With<PonOption>, Without<PonDeclared>)>,
+    higher_priority: Query<(), With<RonOption>>,
     mut query: Query<(&mut Hand, &mut OpenMentsu)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
-    discard_query: Single<&DiscardedBy, With<CurrentDiscard>>,
+    discarded_by: Single<&DiscardedBy, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
     mut commands: Commands,
 ) {
-    for message in messages.read(){
-        if lock.0 { 
-            return; 
-        }
+    if !undecided.is_empty() || !higher_priority.is_empty() {
+        return;
+    }
+    if lock.0 {
+        return;
+    }
 
-        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player) 
-            && can_declare_pon(&hand.0 ,&message.tile) { 
-                lock.0 = true;
-                commands.entity(discard_query.0).insert(DiscardWasCalled);
+    for (player, pon_option) in declared.iter() {
+        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(player) {
+            lock.0 = true;
+            let tile = pon_option.0;
 
-                open_mentsu.0.push(Mentsu::Koutsu([message.tile; 3], false));
-                println!("{} declares Pon on {:?}", message.player, message.tile);
-                for _ in 0..2 {
-                    let idx = hand.0.iter().position(|x| *x == message.tile).unwrap();
-                    hand.0.remove(idx);
-                }
-                // this does compile because of non-lexical lifetimes
-                // same with chi and kan
-                for player in ippatsu_query.iter() {
-                    commands.entity(player).remove::<Ippatsu>();
-                }
-                commands.entity(message.player).remove::<ClosedHand>();
-                commands.entity(message.player).insert(ForbiddenDiscard(vec![message.tile]));
-                game.calls_made = true;
-                current_turn.0 = message.player;
-                next_state.set(TurnState::MainPhase);
-                // timer.0.reset();
+            open_mentsu.0.push(Mentsu::Koutsu([tile; 3], false));
+            println!("{} declares Pon on {:?}", player, tile);
+
+            for _ in 0..2 {
+                let idx = hand.0.iter().position(|x| *x == tile).unwrap();
+                hand.0.remove(idx);
+            }
+
+            // this does compile because of non-lexical lifetimes
+            // same with chi and kan
+            for ippatsu_player in ippatsu_query.iter() {
+                commands.entity(ippatsu_player).remove::<Ippatsu>();
+            }
+
+            commands.entity(player).remove::<ClosedHand>();
+            commands.entity(discarded_by.0).insert(DiscardWasCalled);
+            commands.entity(player).insert(ForbiddenDiscard(vec![tile]));
+
+            game.calls_made = true;
+            current_turn.0 = player;
+            next_state.set(TurnState::MainPhase);
+            // timer.0.reset();
+            break;
         }
     }
 }
+
+
 
 
 pub fn chi_check(
@@ -1235,110 +1247,118 @@ pub fn chi_check(
 
 
 pub fn declare_chi(
-    mut messages: MessageReader<DeclareChiMessage>,
+    declared: Query<(Entity, &ChiOption, &ChiDeclared)>,
+    undecided: Query<(), (With<ChiOption>, Without<ChiDeclared>)>,
+    higher_priority: Query<(), Or<(With<RonOption>, With<PonOption>, With<DaiminkanOption>)>>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, &Jikaze)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
-    discard_query: Single<&DiscardedBy, With<CurrentDiscard>>,
+    discarded_by: Single<&DiscardedBy, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
     mut commands: Commands,
 ) {
-    for message in messages.read() {
-        if lock.0 { 
-            return; 
-        }
+    if !undecided.is_empty() || !higher_priority.is_empty() {
+        return;
+    }
+    if lock.0 {
+        return;
+    }
 
+    for (player, chi_option, chi_declared) in declared.iter() {
         let is_valid = if let (
             Ok((hand, _, self_jikaze)),
             Ok((_, _, discard_jikaze))
         ) = (
-            query.get(message.player),
-            query.get(discard_query.0)
+            query.get(player),
+            query.get(discarded_by.0)
         ) {
-            let positions = can_declare_chi(&hand.0, &message.tile);
+            let positions = can_declare_chi(&hand.0, &chi_option.tile);
             !positions.is_empty()
-                && positions.contains(&message.pos)
+                && positions.contains(&chi_declared.0)
                 && self_jikaze.0.is_kamicha_to(&discard_jikaze.0)
         } else {
             false
         };
 
-        if is_valid && let Ok((mut hand, mut open_mentsu, _))= query.get_mut(message.player) {
+        if is_valid && let Ok((mut hand, mut open_mentsu, _))= query.get_mut(player) {
             lock.0 = true;
-            commands.entity(discard_query.0).insert(DiscardWasCalled);
 
-            let pos: &ChiTilePos = &message.pos; // let the player choose 
-            let tile = &message.tile;
+            let pos = &chi_declared.0; // let the player choose
+            let tile = &chi_option.tile;
 
             match pos {
                 ChiTilePos::Middle => {
-                    println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
+                    println!("{} declares Chi on {:?} (position: {:?})", player, tile, pos);
                     let next = next_tile_sequence(tile).unwrap();
                     let prev = previous_tile_sequence(tile).unwrap();
-                    // use the variables as a pointer for removal first b4 moving the value 
+                    // use the variables as a pointer for removal first b4 moving the value
                     hand.remove_tile_from_hand(&next);
                     hand.remove_tile_from_hand(&prev);
-                    open_mentsu.0.push(Mentsu::Shuntsu([prev, *tile, next], false));   
-                    commands.entity(message.player).insert(ForbiddenDiscard(vec![*tile]));                   
+                    open_mentsu.0.push(Mentsu::Shuntsu([prev, *tile, next], false));
+                    commands.entity(player).insert(ForbiddenDiscard(vec![*tile]));
                 },
                 ChiTilePos::Left => {
-                    println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
+                    println!("{} declares Chi on {:?} (position: {:?})", player, tile, pos);
                     let next = next_tile_sequence(tile).unwrap();
                     let next_next = next_tile_sequence(&next).unwrap();
 
                     // https://riichi.wiki/Kuikae
-                    let mut forbidden = vec![];
-                    if hand.0.contains(tile) { 
-                        forbidden.push(*tile); 
+                    let mut forbidden = Vec::new();
+                    if hand.0.contains(tile) {
+                        forbidden.push(*tile);
                     }
-                    if let Some(n) = next_tile_sequence(&next_next) { 
-                        forbidden.push(n); 
+                    if let Some(n) = next_tile_sequence(&next_next) {
+                        forbidden.push(n);
                     }
                     if !forbidden.is_empty() {
-                        commands.entity(message.player).insert(ForbiddenDiscard(forbidden));
+                        commands.entity(player).insert(ForbiddenDiscard(forbidden));
                     }
 
                     hand.remove_tile_from_hand(&next);
                     hand.remove_tile_from_hand(&next_next);
                     open_mentsu.0.push(Mentsu::Shuntsu([*tile, next, next_next], false));
-                    
                 },
                 ChiTilePos::Right => {
-                    println!("{} declares Chi on {:?} (position: {:?})", message.player, message.tile, message.pos);
+                    println!("{} declares Chi on {:?} (position: {:?})", player, tile, pos);
                     let prev = previous_tile_sequence(tile).unwrap();
                     let prev_prev = previous_tile_sequence(&prev).unwrap();
 
-                    let mut forbidden = vec![];
-                    if hand.0.contains(tile) { 
-                        forbidden.push(*tile); 
+                    let mut forbidden = Vec::new();
+                    if hand.0.contains(tile) {
+                        forbidden.push(*tile);
                     }
-                    if let Some(p) = previous_tile_sequence(&prev_prev) { 
-                        forbidden.push(p); 
+                    if let Some(p) = previous_tile_sequence(&prev_prev) {
+                        forbidden.push(p);
                     }
                     if !forbidden.is_empty() {
-                        commands.entity(message.player).insert(ForbiddenDiscard(forbidden));
+                        commands.entity(player).insert(ForbiddenDiscard(forbidden));
                     }
-        
 
                     hand.remove_tile_from_hand(&prev);
                     hand.remove_tile_from_hand(&prev_prev);
                     open_mentsu.0.push(Mentsu::Shuntsu([prev_prev, prev, *tile], false));
                 },
             }
-            
-            commands.entity(message.player).remove::<ClosedHand>(); 
+
+            commands.entity(player).remove::<ClosedHand>();
+            commands.entity(discarded_by.0).insert(DiscardWasCalled);
             game.calls_made = true;
-            for player in ippatsu_query.iter() {
-                commands.entity(player).remove::<Ippatsu>();
+
+            for ippatsu_player in ippatsu_query.iter() {
+                commands.entity(ippatsu_player).remove::<Ippatsu>();
             }
-            current_turn.0 = message.player;
+
+            current_turn.0 = player;
             next_state.set(TurnState::MainPhase);
             // timer.0.reset();
+            break;
         }
     }
 }
+
+
 
 
 pub fn player_and_total_kan_count(query: &Query<&OpenMentsu>) -> (u8, u8) {
@@ -1523,48 +1543,59 @@ pub fn declare_drawn_kan(
 
 // daiminkan
 pub fn declare_discarded_kan(
-    mut messages: MessageReader<DeclareKanMessage>,
+    declared: Query<(Entity, &DaiminkanOption), With<DaiminkanDeclared>>,
+    undecided: Query<(), (With<DaiminkanOption>, Without<DaiminkanDeclared>)>,
+    higher_priority: Query<(), With<RonOption>>,
     mut query: Query<(&mut Hand, &mut OpenMentsu)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
-    discard_query: Single<&DiscardedBy, With<CurrentDiscard>>,
+    discarded_by: Single<&DiscardedBy, With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
     mut commands: Commands
 ) {
-    for message in messages.read() {
-        if !message.is_discard { continue; } // closed kan handled in main phase
-        if lock.0 { return; }
+    if !undecided.is_empty() || !higher_priority.is_empty() {
+        return;
+    }
+    if lock.0 {
+        return;
+    }
 
-        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(message.player) {
+    for (player, daiminkan_option) in declared.iter() {
+        if let Ok((mut hand, mut open_mentsu)) = query.get_mut(player) {
             lock.0 = true;
-            commands.entity(discard_query.0).insert(DiscardWasCalled);
-            let tile = &message.tile;
+            let tile = &daiminkan_option.0;
 
             let count = can_declare_kan_from_hand(&hand.0, tile);
 
             if count == 3 {
                 open_mentsu.0.push(Mentsu::Daiminkan([*tile; 4]));
                 hand.0.retain(|x| x != tile);
-                commands.entity(message.player).remove::<ClosedHand>();
+
+                commands.entity(player).remove::<ClosedHand>();
+                commands.entity(discarded_by.0).insert(DiscardWasCalled);
+
                 game.pending_kan_dora = true;
                 game.pending_rinshan = true;
-
-                println!("{} declares Daiminkan on {:?}", message.player, tile);
-
                 game.calls_made = true;
-                for player in ippatsu_query.iter() {
-                    commands.entity(player).remove::<Ippatsu>();
+
+                println!("{} declares Daiminkan on {:?}", player, tile);
+
+                for ippatsu_player in ippatsu_query.iter() {
+                    commands.entity(ippatsu_player).remove::<Ippatsu>();
                 }
-                current_turn.0 = message.player;
+
+                current_turn.0 = player;
                 next_state.set(TurnState::RinshanDraw);
             } else {
-                println!("{} attempted Daiminkan on {:?} but failed", message.player, tile);
+                println!("{} attempted Daiminkan on {:?} but failed", player, tile);
             }
+            break;
         }
     }
 }
+
 
 pub fn spawn_camera(mut commands: Commands) { 
     commands.spawn(Camera2d::default()); 

@@ -197,3 +197,14 @@ pub struct ForbiddenDiscard(pub Vec<Tile>);
 pub struct DiscardWasCalled;
 
 
+#[derive(Component)]
+pub struct PonDeclared;
+
+#[derive(Component)]
+pub struct DaiminkanDeclared;
+
+#[derive(Component)]
+pub struct ChiDeclared(pub ChiTilePos);
+
+
+
