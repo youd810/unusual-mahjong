@@ -107,7 +107,11 @@ pub fn call_window_ui_system(
                         commands.entity(player).insert(RonDeclared);
                     }
                     if let Some(p) = pon && ui.button(format!("Pon {:?}", p.0)).clicked() {
-                        pon_writer.write(DeclarePonMessage { player, tile: p.0 });  
+                        commands.entity(player)
+                            .insert(PonDeclared)
+                            .remove::<RonOption>()
+                            .remove::<ChiOption>()
+                            .remove::<DaiminkanOption>();
                     }
                     
                     if let Some(c) = chi {
@@ -116,7 +120,7 @@ pub fn call_window_ui_system(
                                 ChiTilePos::Left => {
                                     let n = next_tile_sequence(&c.tile).unwrap();
                                     let nn = next_tile_sequence(&n).unwrap();
-                                    format!("Chi [{:?} {:?} {:?}]", c.tile, n, nn)
+                                    format!("Chi[{:?} {:?} {:?}]", c.tile, n, nn)
                                 }
                                 ChiTilePos::Middle => {
                                     let p = previous_tile_sequence(&c.tile).unwrap();
@@ -131,17 +135,21 @@ pub fn call_window_ui_system(
                             };
 
                             if ui.button(&label).clicked() {
-                                chi_writer.write(DeclareChiMessage {
-                                    player,
-                                    tile: c.tile,
-                                    pos: *pos,
-                                });
+                                commands.entity(player)
+                                    .insert(ChiDeclared(*pos))
+                                    .remove::<RonOption>()
+                                    .remove::<PonOption>()
+                                    .remove::<DaiminkanOption>();
                             }
                         }
                     }
 
                     if let Some(k) = kan && ui.button(format!("Kan {:?}", k.0)).clicked() {
-                        kan_writer.write(DeclareKanMessage { player, tile: k.0, is_discard: true });
+                        commands.entity(player)
+                            .insert(DaiminkanDeclared)
+                            .remove::<RonOption>()
+                            .remove::<PonOption>()
+                            .remove::<ChiOption>();
                     }
 
                     if ui.button("Skip").clicked() {
@@ -779,6 +787,55 @@ pub fn debug_ui_system(
                     ];
                     apply_debug_hand(player, hand, Tile::Man(9), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
                 }
+
+                if ui.button("Test Call Priority Fix").clicked() {
+                    let mut human_entity = Entity::PLACEHOLDER;
+                    let mut bot_entity = Entity::PLACEHOLDER;
+
+                    for (entity, _, _, is_human) in query.iter() {
+                        if is_human { human_entity = entity; }
+                        else { bot_entity = entity; }
+                    }
+
+                    // gives the bot the actual tiles so declare_pon doesn't reject it
+                    if let Ok((_, mut bot_hand, _, _)) = query.get_mut(bot_entity) {
+                        bot_hand.0.push(Tile::Pin(5));
+                        bot_hand.0.push(Tile::Pin(5));
+                    }
+
+                    // strips any leftover components
+                    commands.entity(human_entity).remove::<RonDeclared>();
+
+                    // spawns a dummy discard on the table
+                    commands.spawn((
+                        CurrentDiscard,
+                        DiscardedTile(Tile::Pin(5)),
+                        DiscardedBy(bot_entity),
+                    ));
+
+                    // gives human a valid ron option
+                    commands.entity(human_entity).insert(RonOption {
+                        discarded_by: bot_entity,
+                        result: HandResult {
+                            yaku_names: vec!["Debug Ron".to_string()],
+                            dora_count: 0,
+                            ura_dora_count: 0,
+                            total_han: 1,
+                            total_fu: 30,
+                            is_yakuman: false,
+                        }
+                    });
+
+                    // instantly lock the bot's decision into the ECS
+                    commands.entity(bot_entity).insert((
+                        PonOption(Tile::Pin(5)),
+                        PonDeclared,
+                    ));
+
+                    // start the call window
+                    next_state.set(TurnState::CallWindow);
+                }
+
             });
 
             ui.separator();

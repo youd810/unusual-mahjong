@@ -125,23 +125,30 @@ pub fn bot_call_system(
     query: Query<(
         Entity, &BotProfile, &Hand, &OpenMentsu, &Jikaze,
         Option<&RonOption>, Option<&PonOption>, Option<&ChiOption>, Option<&DaiminkanOption>,
-    ), Without<HumanPlayer>>,
-    human_options: Query<(), (With<HumanPlayer>, Or<(With<RonOption>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>)>,
+    ), (
+        Without<HumanPlayer>,
+        Without<RonDeclared>,       // lock in decisions
+        Without<PonDeclared>,       
+        Without<ChiDeclared>,       
+        Without<DaiminkanDeclared>  
+    )>,
     game: Res<GameState>,
     dead_wall: Res<DeadWall>,
-    mut pon_writer: MessageWriter<DeclarePonMessage>,
-    mut chi_writer: MessageWriter<DeclareChiMessage>,
-    mut kan_writer: MessageWriter<DeclareKanMessage>,
-    discard_query: Single<&DiscardedTile, With<CurrentDiscard>>,
-    discarded_by: Single<&DiscardedBy, With<CurrentDiscard>>,
     mut commands: Commands,
 ) {
-    let human_is_deciding = !human_options.is_empty();
-
     for (player, profile, hand, open_mentsu, jikaze, ron, pon, chi, kan) in query.iter() {
+        // If the bot has no options left, ignore them
         if ron.is_none() && pon.is_none() && chi.is_none() && kan.is_none() { continue; }
-        if ron.is_some() { commands.entity(player).insert(RonDeclared); continue; }
-        if human_is_deciding { continue; }
+
+        // Always prioritize Ron if available, and strip other options to prevent stalling
+        if ron.is_some() {
+            commands.entity(player)
+                .insert(RonDeclared)
+                .remove::<PonOption>()
+                .remove::<ChiOption>()
+                .remove::<DaiminkanOption>();
+            continue;
+        }
 
         let pre_shanten = calculate_shanten(&combine_tiles(&hand.0, &open_mentsu.0));
 
@@ -158,7 +165,7 @@ pub fn bot_call_system(
 
         // candidates: (score, action_index)
         // 0 = kan, 1 = pon, 2+ = chi at positions[idx - 2]
-        let mut candidates: Vec<((i32, i32, i32, i32), usize)> = vec![];
+        let mut candidates: Vec<((i32, i32, i32, i32), usize)> = Vec::new();
 
         if let Some(k) = kan {
             let mut temp_hand = hand.0.clone();
@@ -192,7 +199,7 @@ pub fn bot_call_system(
                     ChiTilePos::Right => {
                         let prev = previous_tile_sequence(&c.tile).unwrap();
                         let prev_prev = previous_tile_sequence(&prev).unwrap();
-                        (prev_prev, prev, [prev_prev, prev, c.tile])
+                        (prev_prev, prev,[prev_prev, prev, c.tile])
                     },
                 };
                 let mut temp_hand = Hand(hand.0.clone());
@@ -204,7 +211,16 @@ pub fn bot_call_system(
             }
         }
 
-        let Some(&(best_score, best_idx)) = candidates.iter().max_by_key(|(s, _)| *s) else { continue };
+        let Some(&(best_score, best_idx)) = candidates.iter().max_by_key(|(s, _)| *s) else {
+            // Bot skips if no candidates
+            commands.entity(player)
+                .remove::<RonOption>()
+                .remove::<PonOption>()
+                .remove::<ChiOption>()
+                .remove::<DaiminkanOption>();
+            continue;
+        };
+
         let (best_han, neg_shanten, _, best_dora) = best_score;
         let post_shanten = -neg_shanten;
 
@@ -220,20 +236,37 @@ pub fn bot_call_system(
 
         if pre_shanten >= post_shanten && best_han > 0 && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance) {
             match best_idx {
-                0 => { kan_writer.write(DeclareKanMessage { player, tile: discard_query.0, is_discard: true }); },
-                1 => { pon_writer.write(DeclarePonMessage { player, tile: discard_query.0 }); },
+                0 => {
+                    commands.entity(player)
+                        .insert(DaiminkanDeclared)
+                        .remove::<RonOption>()
+                        .remove::<PonOption>()
+                        .remove::<ChiOption>();
+                },
+                1 => {
+                    commands.entity(player)
+                        .insert(PonDeclared)
+                        .remove::<RonOption>()
+                        .remove::<DaiminkanOption>()
+                        .remove::<ChiOption>();
+                },
                 _ => {
                     let c = chi.unwrap();
-                    chi_writer.write(DeclareChiMessage {
-                        player, tile: c.tile, pos: c.positions[best_idx - 2],
-                    });
+                    commands.entity(player)
+                        .insert(ChiDeclared(c.positions[best_idx - 2]))
+                        .remove::<RonOption>()
+                        .remove::<PonOption>()
+                        .remove::<DaiminkanOption>();
                 }
             }
+        } else {
+            // bot decides to skip
+            commands.entity(player)
+                .remove::<RonOption>()
+                .remove::<PonOption>()
+                .remove::<ChiOption>()
+                .remove::<DaiminkanOption>();
         }
-
-        if kan.is_some() { commands.entity(player).remove::<DaiminkanOption>(); }
-        if pon.is_some() { commands.entity(player).remove::<PonOption>(); }
-        if chi.is_some() { commands.entity(player).remove::<ChiOption>(); }
     }
 }
 
