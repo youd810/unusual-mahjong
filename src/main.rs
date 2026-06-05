@@ -83,7 +83,8 @@ fn main() {
             bot_main_phase_system,
             bot_discard_system,
             discard_tile,
-        ).run_if(in_state(TurnState::MainPhase))
+        ).chain()
+        .run_if(in_state(TurnState::MainPhase))
         .run_if(not(resource_exists::<RoundResult>)))
         // main phase ui
         .add_systems(EguiPrimaryContextPass, (

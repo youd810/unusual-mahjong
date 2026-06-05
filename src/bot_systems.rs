@@ -347,6 +347,7 @@ pub fn bot_call_system(
 }
 
 
+//! bots can't declare tsumo as of currently!!
 pub fn bot_main_phase_system(
     query: Query<(
         Entity,

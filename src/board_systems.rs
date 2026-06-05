@@ -692,7 +692,12 @@ pub fn clear_temp_furiten(
 
 // cleanup so player doesn't prepetually qualify for ron
 pub fn cleanup_call_options(
-    all_call: Query<Entity, Or<(With<RonOption>, With<RonDeclared>, With<PonOption>, With<ChiOption>, With<DaiminkanOption>)>>,
+    all_call: Query<Entity, Or<(
+        With<RonOption>, With<RonDeclared>,
+        With<PonOption>, With<PonDeclared>,
+        With<ChiOption>, With<ChiDeclared>,
+        With<DaiminkanOption>, With<DaiminkanDeclared>,
+    )>>,
     discard_query: Single<(Entity, &DiscardedTile, &DiscardedBy), With<CurrentDiscard>>,
     called_check: Query<(), With<DiscardWasCalled>>,
     furiten_check: Query<(Entity, &Tenpai)>,
@@ -723,11 +728,13 @@ pub fn cleanup_call_options(
             .remove::<RonOption>()
             .remove::<RonDeclared>()
             .remove::<PonOption>()
+            .remove::<PonDeclared>()
             .remove::<ChiOption>()
-            .remove::<DaiminkanOption>();
+            .remove::<ChiDeclared>()
+            .remove::<DaiminkanOption>()
+            .remove::<DaiminkanDeclared>();
     }
 }
-
 
 
 // refer to ron counterpart
@@ -1359,8 +1366,6 @@ pub fn declare_chi(
 }
 
 
-
-
 pub fn player_and_total_kan_count(query: &Query<&OpenMentsu>) -> (u8, u8) {
     let mut players_with_kan = 0;
     let mut total_kan = 0;
@@ -1726,13 +1731,14 @@ pub fn discard_tile(
     mut messages: MessageReader<DiscardTileMessage>,
     mut query: Query<(&mut Hand, Option<&DrawnTile>, &mut Kawa, Option<&mut Riichi>, Option<&ForbiddenDiscard>)>,
     mut commands: Commands,
+    current_turn: Res<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut game: ResMut<GameState>,
     mut dead_wall: ResMut<DeadWall>
 ) {
     let mut processed = false;
     for message in messages.read() {
-        if processed { continue; }
+        if processed || message.player != current_turn.0 { continue; }
 
         if let Ok((
             mut hand, maybe_drawn,
