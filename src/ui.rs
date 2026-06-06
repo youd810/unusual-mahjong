@@ -839,6 +839,50 @@ pub fn debug_ui_system(
             });
 
             ui.separator();
+            ui.label("Bot Yaku Testing");
+
+            // tanyao tsumo, waiting on sou(5) and sou(8), draws sou(5)
+            if ui.button("Force Bot Tsumo (Tanyao)").clicked() {
+                let Some((bot, _, _, _)) = query.iter_mut().find(|(_, _, _, is_human)| !*is_human) else { return };
+                let hand = vec![
+                    Tile::Man(2), Tile::Man(3), Tile::Man(4),
+                    Tile::Pin(3), Tile::Pin(4), Tile::Pin(5),
+                    Tile::Sou(2), Tile::Sou(3), Tile::Sou(4),
+                    Tile::Sou(6), Tile::Sou(7),
+                    Tile::Man(5), Tile::Man(5),
+                ];
+                apply_debug_hand(bot, hand, Tile::Sou(5), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+            }
+
+            if ui.button("Force Bot Tsumo (Riichi)").clicked() {
+                let Some((bot, _, _, _)) = query.iter_mut().find(|(_, _, _, is_human)| !*is_human) else { return };
+                let hand = vec![
+                    Tile::Man(2), Tile::Man(3), Tile::Man(4),
+                    Tile::Pin(3), Tile::Pin(4), Tile::Pin(5),
+                    Tile::Sou(2), Tile::Sou(3), Tile::Sou(4),
+                    Tile::Sou(6), Tile::Sou(7),
+                    Tile::Man(5), Tile::Man(5),
+                ];
+                apply_debug_hand(bot, hand, Tile::Sou(1), vec![], &mut commands, &mut wall, &mut current_turn, &mut next_state);
+            }
+
+            // open hand, no yaku, waiting on sou(5) and sou(8), draws sou(5)
+            if ui.button("Force Bot Tsumo (No Yaku)").clicked() {
+                let Some((bot, _, _, _)) = query.iter_mut().find(|(_, _, _, is_human)| !*is_human) else { return };
+                let hand = vec![
+                    Tile::Man(2), Tile::Man(9),
+                    Tile::Sou(6), Tile::Sou(7),
+                    Tile::Pin(8), Tile::Pin(8),
+                ];
+                let open = vec![
+                    Mentsu::Koutsu([Tile::Pin(5); 3], false),
+                    Mentsu::Shuntsu([Tile::Man(2), Tile::Man(3), Tile::Man(4)], false),
+                ];
+                apply_debug_hand(bot, hand, Tile::Sou(5), open, &mut commands, &mut wall, &mut current_turn, &mut next_state);
+            }
+
+
+            ui.separator();
             ui.label("Tochuu Ryuukyoku");
 
             if ui.button("Force Suufon Renda").clicked() {

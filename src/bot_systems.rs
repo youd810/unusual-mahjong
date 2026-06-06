@@ -209,20 +209,28 @@ pub fn bot_call_system(
     mut commands: Commands,
 ) {
     for (player, profile, hand, open_mentsu, jikaze, ron, pon, chi, kan) in query.iter() {
-        // If the bot has no options left, ignore them
         if ron.is_none() && pon.is_none() && chi.is_none() && kan.is_none() { continue; }
 
-        // Always prioritize Ron if available, and strip other options to prevent stalling
-        if ron.is_some() {
-            commands.entity(player)
-                .insert(RonDeclared)
-                .remove::<PonOption>()
-                .remove::<ChiOption>()
-                .remove::<DaiminkanOption>();
-            continue;
+        let death_risk = 1.0 / (7.0 - revolver.chamber as f32);
+        let refuses_cheap_win = death_risk > (profile.aggressiveness * profile.composure);
+
+        if let Some(r) = ron {
+            if refuses_cheap_win && r.result.total_han < 2 {
+                commands.entity(player).remove::<RonOption>();
+            } else {
+                commands.entity(player)
+                    .insert(RonDeclared)
+                    .remove::<PonOption>()
+                    .remove::<ChiOption>()
+                    .remove::<DaiminkanOption>();
+                continue;
+            }
         }
 
+        if pon.is_none() && chi.is_none() && kan.is_none() { continue; }
+
         let pre_shanten = calculate_shanten(&combine_tiles(&hand.0, &open_mentsu.0));
+        let is_closed = open_mentsu.0.is_empty();
 
         // scores a simulated post-call hand (now returns a 4-tuple to isolate dora)
         let score = |hand_tiles: &[Tile], open: &[Mentsu]| -> (i32, i32, i32, i32) {
@@ -237,7 +245,7 @@ pub fn bot_call_system(
 
         // candidates: (score, action_index)
         // 0 = kan, 1 = pon, 2+ = chi at positions[idx - 2]
-        let mut candidates: Vec<((i32, i32, i32, i32), usize)> = Vec::new();
+        let mut candidates: Vec<((i32, i32, i32, i32), usize)> = vec![];
 
         if let Some(k) = kan {
             let mut temp_hand = hand.0.clone();
@@ -284,7 +292,7 @@ pub fn bot_call_system(
         }
 
         let Some(&(best_score, best_idx)) = candidates.iter().max_by_key(|(s, _)| *s) else {
-            // Bot skips if no candidates
+            // bot skips if no candidates
             commands.entity(player)
                 .remove::<RonOption>()
                 .remove::<PonOption>()
@@ -296,8 +304,6 @@ pub fn bot_call_system(
         let (best_han, neg_shanten, _, best_dora) = best_score;
         let post_shanten = -neg_shanten;
 
-        let death_risk = 1.0 / (7.0 - revolver.chamber as f32);
-        let refuses_cheap_win = death_risk > (profile.aggressiveness * profile.composure);
 
         let mut rng = rand::rng();
 
@@ -308,21 +314,24 @@ pub fn bot_call_system(
         let shanten_chance = (profile.aggressiveness * value_multiplier / (post_shanten as f32 + 1.0)) * profile.speed;
         let dora_chance = (profile.speed * value_multiplier) + (best_dora as f32 * 0.25);
         
+        let ruins_closed_tenpai = is_closed && pre_shanten == 0;
         let is_cheap_and_risky = refuses_cheap_win && total_estimated_han < 2;
 
-        if !is_cheap_and_risky && pre_shanten >= post_shanten && best_han > 0 && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance) {
+        if !ruins_closed_tenpai 
+        && !is_cheap_and_risky 
+        && pre_shanten >= post_shanten 
+        && best_han > 0 
+        && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance) {
             match best_idx {
                 0 => {
                     commands.entity(player)
                         .insert(DaiminkanDeclared)
-                        .remove::<RonOption>()
                         .remove::<PonOption>()
                         .remove::<ChiOption>();
                 },
                 1 => {
                     commands.entity(player)
                         .insert(PonDeclared)
-                        .remove::<RonOption>()
                         .remove::<DaiminkanOption>()
                         .remove::<ChiOption>();
                 },
@@ -330,7 +339,6 @@ pub fn bot_call_system(
                     let c = chi.unwrap();
                     commands.entity(player)
                         .insert(ChiDeclared(c.positions[best_idx - 2]))
-                        .remove::<RonOption>()
                         .remove::<PonOption>()
                         .remove::<DaiminkanOption>();
                 }
@@ -347,7 +355,6 @@ pub fn bot_call_system(
 }
 
 
-//! bots can't declare tsumo as of currently!!
 pub fn bot_main_phase_system(
     query: Query<(
         Entity,
@@ -374,7 +381,6 @@ pub fn bot_main_phase_system(
 
         if let Some(t) = tsumo {
             tsumo_writer.write(DeclareTsumoMessage { player, result: t.result.to_owned() });
-            commands.entity(player).remove::<TsumoOption>();
             break;
         }
 
@@ -411,18 +417,14 @@ pub fn bot_main_phase_system(
 
             if should_riichi {
                 commands.entity(player).insert(RiichiSelecting);
-                commands.entity(player).insert(RiichiSelecting).remove::<RiichiOption>();
             }
         }
         else if let Some(a) = ankan {
             kan_writer.write(DeclareKanMessage { player, tile: a.0[0], is_discard: false });
-            commands.entity(player).remove::<AnkanOption>();
         } else if let Some(s) = shouminkan {
             kan_writer.write(DeclareKanMessage { player, tile: s.0[0], is_discard: false });
-            commands.entity(player).remove::<ShouminkanOption>();
         } else if kyuushu.is_some() {
             kyuushu_writer.write(DeclareKyuushuMessage { player });
-            commands.entity(player).remove::<KyuushuOption>();
         }
 
     }
