@@ -24,7 +24,7 @@ pub fn blackout_check_system(
         return;
     }
 
-    if rand::random::<f32>() > 0.002 {
+    if rand::random::<f32>() > 0.001 {
         return;
     }
 
@@ -1521,26 +1521,29 @@ pub fn declare_drawn_kan(
             }
 
             match kan_successful_type {
-                Some(Kantsu::Ankan) => println!("{} declares Ankan on {:?}", message.player, tile),
-                Some(Kantsu::Shouminkan) => println!("{} declares Shouminkan on {:?}", message.player, tile),
+                Some(Kantsu::Ankan) => {
+                    println!("{} declares Ankan on {:?}", message.player, tile);
+
+                    game.calls_made = true;
+                    for player in ippatsu_query.iter() {
+                        commands.entity(player).remove::<Ippatsu>();
+                    }
+                    current_turn.0 = message.player;
+                    next_state.set(TurnState::RinshanDraw);
+                },
+                Some(Kantsu::Shouminkan) => {
+                    println!("{} declares Shouminkan on {:?}", message.player, tile);
+
+                    game.calls_made = true;
+                    for player in ippatsu_query.iter() {
+                        commands.entity(player).remove::<Ippatsu>();
+                    }
+                    current_turn.0 = message.player;
+                    next_state.set(TurnState::CallWindow);
+                },
                 None => println!("{} attempted closed Kan on {:?} but failed", message.player, tile),
-                _ => {}
             }
 
-            if kan_successful_type == Some(Kantsu::Ankan) {
-                game.calls_made = true;
-                for player in ippatsu_query.iter() {
-                    commands.entity(player).remove::<Ippatsu>();
-                }
-                current_turn.0 = message.player;
-                next_state.set(TurnState::RinshanDraw);
-            } else if kan_successful_type == Some(Kantsu::Shouminkan) {
-                for player in ippatsu_query.iter() {
-                    commands.entity(player).remove::<Ippatsu>();
-                }
-                current_turn.0 = message.player;
-                next_state.set(TurnState::CallWindow);
-            }
         }
     }
 }

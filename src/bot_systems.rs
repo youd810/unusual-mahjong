@@ -14,7 +14,8 @@ use crate::messages::*;
 pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
     query: Query<(
-        Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, &BotProfile, Has<RiichiSelecting>, Option<&ForbiddenDiscard>
+        Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, &BotProfile,
+        Has<RiichiSelecting>, Option<&ForbiddenDiscard>, Option<&RiichiOption>, Has<Riichi>
     ), (
         Without<HumanPlayer>,
         Without<TsumoOption>,
@@ -29,7 +30,23 @@ pub fn bot_discard_system(
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
     mut commands: Commands,
 ) {
-    if let Ok((player, maybe_drawn, hand, open_mentsu, profile, is_selecting, maybe_forbidden)) = query.get(current_turn.0) {
+    if let Ok((
+        player, maybe_drawn, 
+        hand, open_mentsu, 
+        profile, is_selecting, 
+        maybe_forbidden, maybe_riichi, is_riichi)) = query.get(current_turn.0) {
+
+        if is_riichi {
+            if let Some(drawn) = maybe_drawn {
+                messages.write(DiscardTileMessage {
+                    player: current_turn.0,
+                    tile: drawn.0,
+                    is_tsumogiri: true,
+                });
+            }
+            return;
+        }
+        
         let mut hand_plus_drawn = hand.0.to_owned();
         if let Some(drawn) = maybe_drawn {
             hand_plus_drawn.push(drawn.0);
@@ -114,7 +131,16 @@ pub fn bot_discard_system(
             }
         }
 
-        let forbidden_slice = maybe_forbidden.map(|f| f.0.as_slice());
+        let mut forbidden_tiles = maybe_forbidden.map(|f| f.0.clone()).unwrap_or_default();
+        if is_selecting && let Some(riichi) = maybe_riichi {
+            for tile in &hand_plus_drawn {
+                if !riichi.0.contains(tile) {
+                    forbidden_tiles.push(*tile);
+                }
+            }
+        }
+        let forbidden_slice = if forbidden_tiles.is_empty() { None } else { Some(forbidden_tiles.as_slice()) };
+
         let target_yaku = determine_bot_strategy(&hand_plus_drawn, revolver.chamber, profile);
 
         let discard = evaluate_discard(

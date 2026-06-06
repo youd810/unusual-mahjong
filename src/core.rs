@@ -46,9 +46,8 @@ impl Mentsu {
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum Kantsu {
+pub enum Kantsu { // drawn kan only
     Ankan,
-    Daiminkan,
     Shouminkan,
 }
 
