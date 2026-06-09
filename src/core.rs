@@ -389,22 +389,38 @@ pub fn get_discard_penalty(tile: &Tile, target: &TargetYaku, freq: u8) -> i32 {
             if !is_yaochuuhai { 10000 } else { 0 }
         }
         TargetYaku::Honitsu(target_suit) => {
-            let matches_suit = match (tile, target_suit) {
-                (Tile::Man(_), Suit::Man) => true,
-                (Tile::Pin(_), Suit::Pin) => true,
-                (Tile::Sou(_), Suit::Sou) => true,
-                _ => false,
-            };
+            let matches_suit = matches!((tile, target_suit), (Tile::Man(_), Suit::Man) | (Tile::Pin(_), Suit::Pin) | (Tile::Sou(_), Suit::Sou));
             if matches_suit || is_honor { 10000 } else { 0 }
         }
         TargetYaku::Chinitsu(target_suit) => {
-            let matches_suit = match (tile, target_suit) {
-                (Tile::Man(_), Suit::Man) => true,
-                (Tile::Pin(_), Suit::Pin) => true,
-                (Tile::Sou(_), Suit::Sou) => true,
+            let matches_suit = matches!((tile, target_suit), (Tile::Man(_), Suit::Man) | (Tile::Pin(_), Suit::Pin) | (Tile::Sou(_), Suit::Sou));
+            if matches_suit { 10000 } else { 0 }
+        }
+        TargetYaku::Ittsuu(target_suit) => {
+            let matches_suit = matches!((tile, target_suit), (Tile::Man(_), Suit::Man) | (Tile::Pin(_), Suit::Pin) | (Tile::Sou(_), Suit::Sou));
+            if matches_suit { 10000 } else { 0 }
+        }
+        TargetYaku::SanshokuDoujun(n) => {
+            let dominated = match tile {
+                Tile::Man(v) | Tile::Pin(v) | Tile::Sou(v) => *v >= *n && *v <= n + 2,
                 _ => false,
             };
-            if matches_suit { 10000 } else { 0 }
+            if dominated { 10000 } else { 0 }
+        }
+        TargetYaku::Chanta => {
+            let is_chanta_tile = matches!(tile,
+                Tile::Man(1|2|3|7|8|9) | Tile::Pin(1|2|3|7|8|9) | Tile::Sou(1|2|3|7|8|9) | Tile::Honor(_)
+            );
+            if is_chanta_tile { 10000 } else { 0 }
+        }
+        TargetYaku::Junchan => {
+            let is_junchan_tile = matches!(tile,
+                Tile::Man(1|2|3|7|8|9) | Tile::Pin(1|2|3|7|8|9) | Tile::Sou(1|2|3|7|8|9)
+            );
+            if is_junchan_tile { 10000 } else { 0 }
+        }
+        TargetYaku::Pinfu => {
+            if is_honor { 10000 } else { 0 }
         }
         TargetYaku::Pairs => {
             if freq >= 2 { 10000 } else { 0 }

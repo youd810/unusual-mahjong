@@ -65,7 +65,11 @@ impl BotProfile {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Suit { Man, Pin, Sou }
+pub enum Suit { 
+    Man, 
+    Pin, 
+    Sou, 
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetYaku {
@@ -75,6 +79,11 @@ pub enum TargetYaku {
     Chinitsu(Suit),
     Pairs,
     Kokushi,
+    SanshokuDoujun(u8),
+    Chanta,
+    Junchan,
+    Pinfu,
+    Ittsuu(Suit),
 }
 
 #[derive(Component)]
@@ -223,7 +232,3 @@ pub struct DaiminkanDeclared;
 
 #[derive(Component)]
 pub struct ChiDeclared(pub ChiTilePos);
-
-
-
-
