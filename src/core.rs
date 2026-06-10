@@ -377,13 +377,14 @@ pub fn index_to_tile(index: usize) -> Tile {
 }
 
 
-pub fn get_discard_penalty(tile: &Tile, target: &TargetYaku, freq: u8) -> i32 {
+pub fn get_discard_penalty(tile: &Tile, target: &TargetYaku, freq: u8, is_dora: bool) -> i32 {
+    let mut penalty = if is_dora { 800 } else { 0 }; // TODO: needs testing
+
     let is_honor = matches!(tile, Tile::Honor(_));
     let is_terminal = matches!(tile, Tile::Man(1|9) | Tile::Pin(1|9) | Tile::Sou(1|9));
     let is_yaochuuhai = is_honor || is_terminal;
 
-    // a massive penalty acts as +10 shanten, forcing the bot to keep the tile
-    match target {
+    penalty += match target {
         TargetYaku::Speed => 0,
         TargetYaku::Tanyao => {
             if !is_yaochuuhai { 10000 } else { 0 }
@@ -431,8 +432,26 @@ pub fn get_discard_penalty(tile: &Tile, target: &TargetYaku, freq: u8) -> i32 {
         TargetYaku::Kokushi => {
             if is_yaochuuhai && freq == 1 { 10000 } else { 0 }
         }
-    }
+        TargetYaku::ChuurenPoutou(target_suit) => {
+            let matches_suit = matches!((tile, target_suit), (Tile::Man(_), Suit::Man) | (Tile::Pin(_), Suit::Pin) | (Tile::Sou(_), Suit::Sou));
+            if matches_suit {
+                if is_terminal { 20000 } else { 10000 }
+            } else { 0 }
+        }
+        TargetYaku::Daisangen => {
+            if matches!(tile, Tile::Honor(Honor::White | Honor::Green | Honor::Red)) { 10000 } else { 0 }
+        }
+        TargetYaku::Tsuuiisou => {
+            if is_honor { 10000 } else { 0 }
+        }
+        TargetYaku::Ryuuiisou => {
+            if is_green(tile) { 10000 } else { 0 }
+        }
+    };
+
+    penalty
 }
+
 
 
 pub fn evaluate_discard(
@@ -443,6 +462,7 @@ pub fn evaluate_discard(
     should_defend: bool,
     forbidden: Option<&[Tile]>,
     target_yaku: TargetYaku,
+    dora_indicators: &[Tile],
 ) -> Tile {
     let mut safe_map =[0; 34];
     let mut has_safe_tiles = false;
@@ -484,11 +504,19 @@ pub fn evaluate_discard(
             .map(|&j| 4i32.saturating_sub(freq_array[j] as i32).saturating_sub(visible_tiles[j] as i32).max(0))
             .sum();
 
+        let mut is_dora = false;
+        for ind in dora_indicators {
+            if current_tile == crate::scoring::get_dora_from_indicator(ind) {
+                is_dora = true;
+                break;
+            }
+        }
+
         // defense overrides target logic entirely
         let penalty = if should_defend {
             0
         } else {
-            get_discard_penalty(&current_tile, &target_yaku, original_freq)
+            get_discard_penalty(&current_tile, &target_yaku, original_freq, is_dora)
         };
 
         // shanten is scaled by 1000 so it dominates ukeire (which can go to tens or hundreds)

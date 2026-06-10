@@ -11,6 +11,181 @@ use crate::messages::*;
 
 // TODO: make bots more assertive to yakuhai calls (or just call in general) if their hand already has other yaku
 
+pub fn determine_bot_strategy(
+    hand: &[Tile],
+    revolver_chamber: u8,
+    profile: &BotProfile,
+    wall_len: usize,
+    current_shanten: i32,
+    dora_indicators: &[Tile],
+) -> TargetYaku {
+    let mut dora_count = 0;
+    for tile in hand {
+        for indicator in dora_indicators {
+            if *tile == get_dora_from_indicator(indicator) {
+                dora_count += 1;
+            }
+        }
+    }
+
+    let death_risk = 1.0 / (7.0 - revolver_chamber as f32);
+
+    let is_high_value = dora_count >= 2;
+    let refuses_cheap_win = !is_high_value && death_risk > (profile.aggressiveness * profile.composure);
+
+    // scale strategic decision with stats
+    let effective_aggressiveness = profile.aggressiveness * profile.composure;
+    let greed_discount = (effective_aggressiveness * 2.0).round() as u8;
+
+    let panic_multiplier = 1.0 + (1.0 - profile.composure);
+    let speed_panic_bonus = (profile.speed * 15.0 * panic_multiplier).round() as usize;
+
+    let panic_wall_threshold = match current_shanten {
+        3.. => 35 + speed_panic_bonus,
+        2 => 20 + speed_panic_bonus,
+        1 => 10 + (speed_panic_bonus / 2),
+        _ => 0,
+    };
+
+    if wall_len < panic_wall_threshold {
+        return TargetYaku::Speed;
+    }
+
+    if dora_count >= 3 {
+        let tanyao_req = 8 - greed_discount;
+        let middle_tiles = hand.iter().filter(|t| !is_yaochuuhai(t)).count() as u8;
+        if middle_tiles >= tanyao_req { return TargetYaku::Tanyao; }
+        return TargetYaku::Speed;
+    }
+
+    let mut freq = [0u8; 34];
+    for tile in hand {
+        freq[tile_to_index(tile)] += 1;
+    }
+
+    let man_count: u8 = (0..9).map(|i| freq[i]).sum();
+    let pin_count: u8 = (9..18).map(|i| freq[i]).sum();
+    let sou_count: u8 = (18..27).map(|i| freq[i]).sum();
+    let honor_count: u8 = (27..34).map(|i| freq[i]).sum();
+    let pairs = freq.iter().filter(|&&f| f == 2).count();
+    let triplets = freq.iter().filter(|&&f| f >= 3).count();
+
+    // count unique orphans for kokushi
+    let mut unique_yaochuuhai = 0;
+    const YAOCHUUHAI_POS: [usize; 13] =[0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33];
+    for &i in YAOCHUUHAI_POS.iter() {
+        if freq[i] > 0 { unique_yaochuuhai += 1; }
+    }
+
+    // kokushi
+    let kokushi_threshold = 10 - greed_discount;
+    if unique_yaochuuhai >= kokushi_threshold { return TargetYaku::Kokushi; }
+
+    // suuankou
+    if triplets == 3 && pairs >= (1u8.saturating_sub(greed_discount / 2)).into() { return TargetYaku::Suuankou; }
+
+    // daisangen
+    let daisangen_req = if profile.aggressiveness < 0.4 { 3 } else { 2 };
+    let mut dragon_pairs = 0;
+    let mut dragon_triplets = 0;
+    for &h in &[31, 32, 33] { // white, green, red
+        if freq[h] >= 3 { dragon_triplets += 1; }
+        else if freq[h] == 2 { dragon_pairs += 1; }
+    }
+    if dragon_triplets + dragon_pairs >= daisangen_req { return TargetYaku::Daisangen; }
+
+    // chuuren poutou
+    let chuuren_req = 12 - greed_discount;
+    for (suit_offset, suit, count) in[(0, Suit::Man, man_count), (9, Suit::Pin, pin_count), (18, Suit::Sou, sou_count)] {
+        if count >= chuuren_req && freq[suit_offset] >= 1 && freq[suit_offset + 8] >= 1 {
+            return TargetYaku::ChuurenPoutou(suit);
+        }
+    }
+
+    // tsuusiou
+    let flush_req = 10 - greed_discount;
+    if honor_count >= flush_req { return TargetYaku::Tsuuiisou; }
+
+    // ryuuisou
+    let green_count = hand.iter().filter(|t| is_green(t)).count() as u8;
+    if green_count >= flush_req { return TargetYaku::Ryuuiisou; }
+
+    // chinitsu
+    if man_count >= flush_req { return TargetYaku::Chinitsu(Suit::Man); }
+    if pin_count >= flush_req { return TargetYaku::Chinitsu(Suit::Pin); }
+    if sou_count >= flush_req { return TargetYaku::Chinitsu(Suit::Sou); }
+
+    // honitsu
+    let half_flush_req = 9 - greed_discount;
+    if man_count + honor_count >= half_flush_req { return TargetYaku::Honitsu(Suit::Man); }
+    if pin_count + honor_count >= half_flush_req { return TargetYaku::Honitsu(Suit::Pin); }
+    if sou_count + honor_count >= half_flush_req { return TargetYaku::Honitsu(Suit::Sou); }
+
+    // ittsuu
+    let ittsuu_req = 7 - (greed_discount / 2);
+    for (suit_offset, suit) in[(0, Suit::Man), (9, Suit::Pin), (18, Suit::Sou)] {
+        let block1 = freq[suit_offset] + freq[suit_offset+1] + freq[suit_offset+2];
+        let block2 = freq[suit_offset+3] + freq[suit_offset+4] + freq[suit_offset+5];
+        let block3 = freq[suit_offset+6] + freq[suit_offset+7] + freq[suit_offset+8];
+        if block1 > 0 && block2 > 0 && block3 > 0 && (block1 + block2 + block3) >= ittsuu_req {
+            return TargetYaku::Ittsuu(suit);
+        }
+    }
+
+    // sanshoku doujun
+    let sanshoku_req = 6 - (greed_discount / 2);
+    let mut best_sanshoku: Option<(u8, u8)> = None;
+    for i in 0..7 {
+        let man = freq[i] + freq[i+1] + freq[i+2];
+        let pin = freq[i+9] + freq[i+10] + freq[i+11];
+        let sou = freq[i+18] + freq[i+19] + freq[i+20];
+        let total = man + pin + sou;
+        if man > 0 && pin > 0 && sou > 0 && total >= sanshoku_req
+        && best_sanshoku.is_none_or(|(_n, prev)| total > prev) {
+            best_sanshoku = Some(((i + 1) as u8, total));
+        }
+    }
+    if let Some((n, _)) = best_sanshoku {
+        return TargetYaku::SanshokuDoujun(n);
+    }
+
+    // junchan/chanta
+    let chanta_tiles = hand.iter().filter(|t| matches!(t,
+        Tile::Man(1|2|3|7|8|9) | Tile::Pin(1|2|3|7|8|9) | Tile::Sou(1|2|3|7|8|9) | Tile::Honor(_)
+    )).count() as u8;
+    let junchan_tiles = hand.iter().filter(|t| matches!(t,
+        Tile::Man(1|2|3|7|8|9) | Tile::Pin(1|2|3|7|8|9) | Tile::Sou(1|2|3|7|8|9)
+    )).count() as u8;
+    let chanta_req = 10 - greed_discount;
+    if junchan_tiles >= chanta_req && honor_count == 0 { return TargetYaku::Junchan; }
+    if chanta_tiles >= chanta_req { return TargetYaku::Chanta; }
+
+    // pinfu
+    if pairs <= 2 && refuses_cheap_win { return TargetYaku::Pinfu; }
+
+    // chiitoitsu
+    if pairs >= 4 && triplets == 0 { return TargetYaku::Chiitoitsu; }
+
+    // sanankou
+    if triplets == 2 && pairs >= 1 { return TargetYaku::Sanankou; }
+
+    // toiotoi
+    if (3..=4).contains(&pairs) && triplets >= 1 { return TargetYaku::Toitoi; }
+
+    // tanyao
+    let tanyao_req = 9 - greed_discount;
+    let middle_tiles = hand.iter().filter(|t| !is_yaochuuhai(t)).count() as u8;
+    if middle_tiles >= tanyao_req { return TargetYaku::Tanyao; }
+
+    // fallback
+    if refuses_cheap_win {
+        TargetYaku::Tanyao
+    } else {
+        TargetYaku::Speed
+    }
+}
+
+
 pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
     query: Query<(
@@ -143,13 +318,17 @@ pub fn bot_discard_system(
         }
         let forbidden_slice = if forbidden_tiles.is_empty() { None } else { Some(forbidden_tiles.as_slice()) };
 
-        let target_yaku = determine_bot_strategy(&hand_plus_drawn, revolver.chamber, profile, wall.0.len(), current_shanten);
-
+        let target_yaku = determine_bot_strategy(
+            &hand_plus_drawn, revolver.chamber, 
+            profile, wall.0.len(), 
+            current_shanten, &dead_wall.dora_indicators);
+        
         let discard = evaluate_discard(
             &hand_plus_drawn, &open_mentsu.0,
             &visible_tiles, &safe_tiles,
             should_defend, forbidden_slice,
-            target_yaku
+            target_yaku,
+            &dead_wall.dora_indicators
         );
 
         if is_selecting {
@@ -162,129 +341,6 @@ pub fn bot_discard_system(
                 is_tsumogiri: maybe_drawn.is_some_and(|drawn| drawn.0 == discard),
             });
         }
-    }
-}
-
-
-// TODO: Add chanta/junchan, ryankantsu, san/suuankou, pinfu, sanshoku
-pub fn determine_bot_strategy(
-    hand: &[Tile],
-    revolver_chamber: u8,
-    profile: &BotProfile,
-    wall_len: usize,
-    current_shanten: i32,
-) -> TargetYaku {
-    let death_risk = 1.0 / (7.0 - revolver_chamber as f32);
-    let refuses_cheap_win = death_risk > (profile.aggressiveness * profile.composure);
-
-    // for ngmi hand
-    // TODO: needs adjustments
-    let panic_wall_threshold = match current_shanten {
-        3.. => 40,
-        2 => 25,
-        1 => 10,
-        _ => 0,
-    };
-
-    if wall_len < panic_wall_threshold {
-        return TargetYaku::Speed;
-    }
-
-    let mut freq = [0u8; 34];
-    for tile in hand {
-        freq[tile_to_index(tile)] += 1;
-    }
-
-    let man_count: u8 = (0..9).map(|i| freq[i]).sum();
-    let pin_count: u8 = (9..18).map(|i| freq[i]).sum();
-    let sou_count: u8 = (18..27).map(|i| freq[i]).sum();
-    let honor_count: u8 = (27..34).map(|i| freq[i]).sum();
-    let pairs = freq.iter().filter(|&&f| f == 2).count();
-    let triplets = freq.iter().filter(|&&f| f >= 3).count();
-
-    // count unique orphans for kokushi
-    let mut unique_yaochuuhai = 0;
-    const YAOCHUUHAI_POS: [usize; 13] =[0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33];
-    for &i in YAOCHUUHAI_POS.iter() {
-        if freq[i] > 0 { unique_yaochuuhai += 1; }
-    }
-
-    //kokushi musou
-    if unique_yaochuuhai >= 9 { return TargetYaku::Kokushi; }
-
-    // suuankou
-    if triplets == 3 && pairs >= 1 { return TargetYaku::Suuankou; }
-
-    // chinitsu
-    if man_count >= 10 { return TargetYaku::Chinitsu(Suit::Man); }
-    if pin_count >= 10 { return TargetYaku::Chinitsu(Suit::Pin); }
-    if sou_count >= 10 { return TargetYaku::Chinitsu(Suit::Sou); }
-
-    // honitsu
-    if man_count + honor_count >= 9 { return TargetYaku::Honitsu(Suit::Man); }
-    if pin_count + honor_count >= 9 { return TargetYaku::Honitsu(Suit::Pin); }
-    if sou_count + honor_count >= 9 { return TargetYaku::Honitsu(Suit::Sou); }
-
-     // ittsuu
-    for (suit_offset, suit) in [(0, Suit::Man), (9, Suit::Pin), (18, Suit::Sou)] {
-        let block1 = freq[suit_offset] + freq[suit_offset+1] + freq[suit_offset+2];
-        let block2 = freq[suit_offset+3] + freq[suit_offset+4] + freq[suit_offset+5];
-        let block3 = freq[suit_offset+6] + freq[suit_offset+7] + freq[suit_offset+8];
-        if block1 > 0 && block2 > 0 && block3 > 0 && (block1 + block2 + block3) >= 7 {
-            return TargetYaku::Ittsuu(suit);
-        }
-    }
-
-    // sanshoku doujun
-    let mut best_sanshoku: Option<(u8, u8)> = None; // (starting number, total coverage)
-    for i in 0..7 {
-        let man = freq[i] + freq[i+1] + freq[i+2];
-        let pin = freq[i+9] + freq[i+10] + freq[i+11];
-        let sou = freq[i+18] + freq[i+19] + freq[i+20];
-        let total = man + pin + sou;
-        if man > 0 && pin > 0 && sou > 0 && total >= 6 
-        && best_sanshoku.is_none_or(|(_n, prev)| total > prev) {
-            best_sanshoku = Some(((i + 1) as u8, total));
-        }
-    }
-    if let Some((n, _)) = best_sanshoku {
-        return TargetYaku::SanshokuDoujun(n);
-    }
-
-    // junchan / chanta
-    let chanta_tiles = hand.iter().filter(|t| matches!(t,
-        Tile::Man(1|2|3|7|8|9) | Tile::Pin(1|2|3|7|8|9) | Tile::Sou(1|2|3|7|8|9) | Tile::Honor(_)
-    )).count();
-    let junchan_tiles = hand.iter().filter(|t| matches!(t,
-        Tile::Man(1|2|3|7|8|9) | Tile::Pin(1|2|3|7|8|9) | Tile::Sou(1|2|3|7|8|9)
-    )).count();
-
-    if junchan_tiles >= 10 && honor_count == 0 { return TargetYaku::Junchan; }
-    if chanta_tiles >= 10 { return TargetYaku::Chanta; }
-
-    // pinfu
-    if pairs <= 2 && refuses_cheap_win {
-        return TargetYaku::Pinfu;
-    }
-
-    // chiitoitsu 
-    if pairs >= 4 && triplets == 0 { return TargetYaku::Chiitoitsu; } // raised to 4 to avoid premature pair locking
-
-    // sanankou
-    if triplets == 2 && pairs >= 1 { return TargetYaku::Sanankou; }
-
-    // toitoi
-    if (3..=4).contains(&pairs) && triplets >= 1 { return TargetYaku::Toitoi; }
-
-    // tanyao
-    let middle_tiles = hand.iter().filter(|t| !is_yaochuuhai(t)).count() as u8;
-    if middle_tiles >= 9 { return TargetYaku::Tanyao; }
-
-    // fallback
-    if refuses_cheap_win {
-        TargetYaku::Tanyao
-    } else {
-        TargetYaku::Speed
     }
 }
 
@@ -331,17 +387,18 @@ pub fn bot_call_system(
 
         let target_yaku = determine_bot_strategy(
             &hand.0, revolver.chamber, profile,
-            wall.0.len(), calculate_shanten(&combine_tiles(&hand.0, &open_mentsu.0))
+            wall.0.len(), calculate_shanten(&combine_tiles(&hand.0, &open_mentsu.0)),
+            &dead_wall.dora_indicators
         );
 
         // closed yaku early return
-        if matches!(target_yaku, TargetYaku::Pinfu | TargetYaku::Kokushi | TargetYaku::Suuankou | TargetYaku::Sanankou | TargetYaku::Chiitoitsu) {
+        if matches!(target_yaku, TargetYaku::Pinfu | TargetYaku::Kokushi | TargetYaku::Suuankou | TargetYaku::Sanankou | TargetYaku::Chiitoitsu | TargetYaku::ChuurenPoutou(_)) {
             commands.entity(player)
                 .remove::<PonOption>()
                 .remove::<ChiOption>()
                 .remove::<DaiminkanOption>();
             continue;
-        } else if matches!(target_yaku, TargetYaku::Chinitsu(_) | TargetYaku::Honitsu(_) | TargetYaku::Tanyao) {
+        } else if matches!(target_yaku, TargetYaku::Chinitsu(_) | TargetYaku::Honitsu(_) | TargetYaku::Tanyao | TargetYaku::Ryuuiisou | TargetYaku::Tsuuiisou) {
             let called_tile = pon.map(|p| p.0)
                 .or_else(|| chi.map(|c| c.tile))
                 .or_else(|| kan.map(|k| k.0))
@@ -370,6 +427,16 @@ pub fn bot_call_system(
                         should_refuse = true;
                     }
                 }
+                TargetYaku::Ryuuiisou => {
+                    if !is_green(&called_tile) {
+                        should_refuse = true;
+                    }
+                }
+                TargetYaku::Tsuuiisou => {
+                    if !is_honor(&called_tile) {
+                        should_refuse = true;
+                    }
+                }
                 _ => {}
             }
 
@@ -384,6 +451,28 @@ pub fn bot_call_system(
 
         let pre_shanten = calculate_shanten(&combine_tiles(&hand.0, &open_mentsu.0));
         let is_closed = open_mentsu.0.is_empty();
+
+        let mut is_critical_call = false;
+        if let Some(called_tile) = pon.map(|p| p.0).or_else(|| kan.map(|k| k.0)).or_else(|| chi.map(|c| c.tile)) {
+            match target_yaku {
+                TargetYaku::Daisangen => {
+                    if matches!(called_tile, Tile::Honor(Honor::White | Honor::Green | Honor::Red)) {
+                        is_critical_call = true;
+                    }
+                }
+                TargetYaku::Tsuuiisou => {
+                    if is_honor(&called_tile) {
+                        is_critical_call = true;
+                    }
+                }
+                TargetYaku::Ryuuiisou => {
+                    if is_green(&called_tile) {
+                        is_critical_call = true;
+                    }
+                }
+                _ => {}
+            }
+        }
 
         // scores a simulated post-call hand (now returns a 4-tuple to isolate dora)
         let score = |hand_tiles: &[Tile], open: &[Mentsu]| -> (i32, i32, i32, i32) {
@@ -470,11 +559,12 @@ pub fn bot_call_system(
         let ruins_closed_tenpai = is_closed && pre_shanten == 0;
         let is_cheap_and_risky = refuses_cheap_win && total_estimated_han < 2;
 
-        if !ruins_closed_tenpai 
-        && !is_cheap_and_risky 
-        && pre_shanten >= post_shanten 
-        && best_han > 0 
-        && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance) {
+        if is_critical_call 
+        || (!ruins_closed_tenpai 
+            && !is_cheap_and_risky 
+            && pre_shanten >= post_shanten 
+            && best_han > 0 
+            && (rng.random::<f32>() < shanten_chance || rng.random::<f32>() < dora_chance)) {
             match best_idx {
                 0 => {
                     commands.entity(player)

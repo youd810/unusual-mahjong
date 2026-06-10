@@ -87,6 +87,10 @@ pub enum TargetYaku {
     Ittsuu(Suit),
     Sanankou,
     Suuankou,
+    ChuurenPoutou(Suit),
+    Daisangen,
+    Tsuuiisou,
+    Ryuuiisou,
 }
 
 #[derive(Component)]
