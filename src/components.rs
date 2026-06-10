@@ -77,13 +77,16 @@ pub enum TargetYaku {
     Tanyao,
     Honitsu(Suit),
     Chinitsu(Suit),
-    Pairs,
+    Chiitoitsu,
+    Toitoi,
     Kokushi,
     SanshokuDoujun(u8),
     Chanta,
     Junchan,
     Pinfu,
     Ittsuu(Suit),
+    Sanankou,
+    Suuankou,
 }
 
 #[derive(Component)]

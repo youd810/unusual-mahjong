@@ -199,7 +199,8 @@ pub fn determine_bot_strategy(
     let pin_count: u8 = (9..18).map(|i| freq[i]).sum();
     let sou_count: u8 = (18..27).map(|i| freq[i]).sum();
     let honor_count: u8 = (27..34).map(|i| freq[i]).sum();
-    let pairs = freq.iter().filter(|&&f| f >= 2).count();
+    let pairs = freq.iter().filter(|&&f| f == 2).count();
+    let triplets = freq.iter().filter(|&&f| f >= 3).count();
 
     // count unique orphans for kokushi
     let mut unique_yaochuuhai = 0;
@@ -210,6 +211,9 @@ pub fn determine_bot_strategy(
 
     //kokushi musou
     if unique_yaochuuhai >= 9 { return TargetYaku::Kokushi; }
+
+    // suuankou
+    if triplets == 3 && pairs >= 1 { return TargetYaku::Suuankou; }
 
     // chinitsu
     if man_count >= 10 { return TargetYaku::Chinitsu(Suit::Man); }
@@ -263,8 +267,14 @@ pub fn determine_bot_strategy(
         return TargetYaku::Pinfu;
     }
 
-    // pairs (chiitoitsu / toitoi)
-    if pairs >= 4 { return TargetYaku::Pairs; } // raised to 4 to avoid premature pair locking
+    // chiitoitsu 
+    if pairs >= 4 && triplets == 0 { return TargetYaku::Chiitoitsu; } // raised to 4 to avoid premature pair locking
+
+    // sanankou
+    if triplets == 2 && pairs >= 1 { return TargetYaku::Sanankou; }
+
+    // toitoi
+    if (3..=4).contains(&pairs) && triplets >= 1 { return TargetYaku::Toitoi; }
 
     // tanyao
     let middle_tiles = hand.iter().filter(|t| !is_yaochuuhai(t)).count() as u8;
@@ -293,6 +303,7 @@ pub fn bot_call_system(
         Without<DaiminkanDeclared>  
     )>,
     game: Res<GameState>,
+    wall: Res<Wall>,
     dead_wall: Res<DeadWall>,
     revolver: Res<Revolver>,
     mut commands: Commands,
@@ -317,6 +328,59 @@ pub fn bot_call_system(
         }
 
         if pon.is_none() && chi.is_none() && kan.is_none() { continue; }
+
+        let target_yaku = determine_bot_strategy(
+            &hand.0, revolver.chamber, profile,
+            wall.0.len(), calculate_shanten(&combine_tiles(&hand.0, &open_mentsu.0))
+        );
+
+        // closed yaku early return
+        if matches!(target_yaku, TargetYaku::Pinfu | TargetYaku::Kokushi | TargetYaku::Suuankou | TargetYaku::Sanankou | TargetYaku::Chiitoitsu) {
+            commands.entity(player)
+                .remove::<PonOption>()
+                .remove::<ChiOption>()
+                .remove::<DaiminkanOption>();
+            continue;
+        } else if matches!(target_yaku, TargetYaku::Chinitsu(_) | TargetYaku::Honitsu(_) | TargetYaku::Tanyao) {
+            let called_tile = pon.map(|p| p.0)
+                .or_else(|| chi.map(|c| c.tile))
+                .or_else(|| kan.map(|k| k.0))
+                .unwrap();
+            let mut should_refuse = false;
+
+            match target_yaku {
+                TargetYaku::Chinitsu(suit) => {
+                    should_refuse = match called_tile {
+                        Tile::Man(_) => suit != Suit::Man,
+                        Tile::Pin(_) => suit != Suit::Pin,
+                        Tile::Sou(_) => suit != Suit::Sou,
+                        Tile::Honor(_) => true,
+                    };
+                }
+                TargetYaku::Honitsu(suit) => {
+                    should_refuse = match called_tile {
+                        Tile::Man(_) => suit != Suit::Man,
+                        Tile::Pin(_) => suit != Suit::Pin,
+                        Tile::Sou(_) => suit != Suit::Sou,
+                        Tile::Honor(_) => false,
+                    };
+                }
+                TargetYaku::Tanyao => {
+                    if is_yaochuuhai(&called_tile) {
+                        should_refuse = true;
+                    }
+                }
+                _ => {}
+            }
+
+            if should_refuse {
+                commands.entity(player)
+                    .remove::<PonOption>()
+                    .remove::<ChiOption>()
+                    .remove::<DaiminkanOption>();
+                continue;
+            }
+        }
 
         let pre_shanten = calculate_shanten(&combine_tiles(&hand.0, &open_mentsu.0));
         let is_closed = open_mentsu.0.is_empty();

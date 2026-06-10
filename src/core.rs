@@ -422,8 +422,11 @@ pub fn get_discard_penalty(tile: &Tile, target: &TargetYaku, freq: u8) -> i32 {
         TargetYaku::Pinfu => {
             if is_honor { 10000 } else { 0 }
         }
-        TargetYaku::Pairs => {
+        TargetYaku::Toitoi | TargetYaku::Sanankou | TargetYaku::Suuankou => {
             if freq >= 2 { 10000 } else { 0 }
+        }
+        TargetYaku::Chiitoitsu => {
+            if freq == 2 { 10000 } else { 0 }
         }
         TargetYaku::Kokushi => {
             if is_yaochuuhai && freq == 1 { 10000 } else { 0 }
@@ -434,7 +437,7 @@ pub fn get_discard_penalty(tile: &Tile, target: &TargetYaku, freq: u8) -> i32 {
 
 pub fn evaluate_discard(
     hand_plus_drawn: &[Tile],
-    open_mentsu: &Vec<Mentsu>,
+    open_mentsu: &[Mentsu],
     visible_tiles: &[u8; 34],
     safe_tiles: &[Tile],
     should_defend: bool,
