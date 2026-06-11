@@ -190,7 +190,8 @@ pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
     query: Query<(
         Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, &BotProfile,
-        Has<RiichiSelecting>, Option<&ForbiddenDiscard>, Option<&RiichiOption>, Has<Riichi>
+        Has<RiichiSelecting>, Option<&ForbiddenDiscard>, Option<&RiichiOption>, Has<Riichi>,
+        &Kawa
     ), (
         Without<HumanPlayer>,
         Without<TsumoOption>,
@@ -207,10 +208,10 @@ pub fn bot_discard_system(
     mut commands: Commands,
 ) {
     if let Ok((
-        player, maybe_drawn, 
-        hand, open_mentsu, 
-        profile, is_selecting, 
-        maybe_forbidden, maybe_riichi, is_riichi)) = query.get(current_turn.0) {
+        player, maybe_drawn, hand, 
+        open_mentsu, profile, is_selecting,
+        maybe_forbidden, maybe_riichi, is_riichi, kawa 
+    )) = query.get(current_turn.0) {
 
         if is_riichi {
             if let Some(drawn) = maybe_drawn {
@@ -321,14 +322,16 @@ pub fn bot_discard_system(
         let target_yaku = determine_bot_strategy(
             &hand_plus_drawn, revolver.chamber, 
             profile, wall.0.len(), 
-            current_shanten, &dead_wall.dora_indicators);
-        
+            current_shanten, &dead_wall.dora_indicators
+        );
+
         let discard = evaluate_discard(
             &hand_plus_drawn, &open_mentsu.0,
             &visible_tiles, &safe_tiles,
             should_defend, forbidden_slice,
             target_yaku,
-            &dead_wall.dora_indicators
+            &dead_wall.dora_indicators,
+            &kawa.0
         );
 
         if is_selecting {
@@ -606,17 +609,25 @@ pub fn bot_main_phase_system(
         Option<&AnkanOption>,
         Option<&ShouminkanOption>,
         Option<&KyuushuOption>,
-        Option<&Hand>,       
-        Option<&DrawnTile>,  
-        Option<&BotProfile>, 
+        Option<&Hand>,
+        Option<&DrawnTile>,
+        Option<&BotProfile>,
+        Option<&Jikaze>, 
     ), Without<HumanPlayer>>,
     visible_query: Query<(Entity, Has<Riichi>)>,
+    revolver: Res<Revolver>,
+    game: Res<GameState>,     
+    dead_wall: Res<DeadWall>,
     mut tsumo_writer: MessageWriter<DeclareTsumoMessage>,
     mut kan_writer: MessageWriter<DeclareKanMessage>,
     mut kyuushu_writer: MessageWriter<DeclareKyuushuMessage>,
     mut commands: Commands,
 ) {
-     for (player, tsumo, riichi, ankan, shouminkan, kyuushu, hand_opt, drawn_opt, profile_opt) in &query {
+    for (
+        player, tsumo, riichi, 
+        ankan, shouminkan, kyuushu, 
+        hand_opt, drawn_opt, profile_opt, jikaze_opt
+    ) in &query {
 
         if tsumo.is_none() && riichi.is_none() && ankan.is_none() && shouminkan.is_none() && kyuushu.is_none() {
             continue;
@@ -630,7 +641,7 @@ pub fn bot_main_phase_system(
         if let Some(r) = riichi {
             let mut should_riichi = true;
 
-            if let (Some(hand), Some(drawn), Some(profile)) = (hand_opt, drawn_opt, profile_opt) {
+            if let (Some(hand), Some(drawn), Some(profile), Some(jikaze)) = (hand_opt, drawn_opt, profile_opt, jikaze_opt) {
                 let mut full_hand = hand.0.clone();
                 full_hand.push(drawn.0);
 
@@ -647,13 +658,29 @@ pub fn bot_main_phase_system(
 
                 // check board danger
                 let someone_riichi = visible_query.iter().any(|(e, is_riichi)| e != player && is_riichi);
+                let death_risk = 1.0 / (7.0 - revolver.chamber as f32);
+                let effective_aggressiveness = ((profile.aggressiveness * profile.composure).max(profile.aggressiveness - 0.2)).max(0.2);
 
-                // discourage lower opt wait
-                if max_wait_types <= 1 {
-                    if someone_riichi && profile.aggressiveness < 0.7 {
-                        should_riichi = false; // damaten
-                    } else if profile.aggressiveness < 0.5 {
-                        should_riichi = false; // tegawari
+                // estimate current han value
+                let estimated_yaku_han = estimate_yaku_han(&full_hand, &jikaze.0, &game.bakaze);
+                let dora_count = count_dora(&full_hand, &dead_wall, false).dora;
+                let total_estimated_han = estimated_yaku_han + dora_count;
+
+                if death_risk > effective_aggressiveness + 0.1 { // base addition
+                    should_riichi = false;
+                } else if total_estimated_han >= 5 {
+                    // discourage mangan hand from riichi
+                    if effective_aggressiveness < 0.5 {
+                        should_riichi = false;
+                    }
+                } else {
+                    // cheap hand ( <4 han)
+                    if max_wait_types <= 1 {
+                        if someone_riichi && effective_aggressiveness < 0.4 {
+                            should_riichi = false;
+                        } else if effective_aggressiveness < 0.2 {
+                            should_riichi = false; // tegawari
+                        }
                     }
                 }
             }
@@ -669,7 +696,6 @@ pub fn bot_main_phase_system(
         } else if kyuushu.is_some() {
             kyuushu_writer.write(DeclareKyuushuMessage { player });
         }
-
     }
 }
 

@@ -380,9 +380,9 @@ pub fn index_to_tile(index: usize) -> Tile {
 pub fn get_discard_penalty(tile: &Tile, target: &TargetYaku, freq: u8, is_dora: bool) -> i32 {
     let mut penalty = if is_dora { 800 } else { 0 }; // TODO: needs testing
 
-    let is_honor = matches!(tile, Tile::Honor(_));
-    let is_terminal = matches!(tile, Tile::Man(1|9) | Tile::Pin(1|9) | Tile::Sou(1|9));
-    let is_yaochuuhai = is_honor || is_terminal;
+    let is_honor = is_honor(tile);
+    let is_terminal = is_terminal(tile);
+    let is_yaochuuhai = is_yaochuuhai(tile);
 
     penalty += match target {
         TargetYaku::Speed => 0,
@@ -463,6 +463,7 @@ pub fn evaluate_discard(
     forbidden: Option<&[Tile]>,
     target_yaku: TargetYaku,
     dora_indicators: &[Tile],
+    own_kawa: &[Tile], 
 ) -> Tile {
     let mut safe_map =[0; 34];
     let mut has_safe_tiles = false;
@@ -504,9 +505,20 @@ pub fn evaluate_discard(
             .map(|&j| 4i32.saturating_sub(freq_array[j] as i32).saturating_sub(visible_tiles[j] as i32).max(0))
             .sum();
 
+        // furiten check
+        let mut furiten_penalty = 0;
+        if shanten == 0 {
+            let is_furiten = ukeire.iter().any(|&wait_idx| {
+                own_kawa.contains(&index_to_tile(wait_idx))
+            });
+            if is_furiten {
+                furiten_penalty = 15000;
+            }
+        }
+
         let mut is_dora = false;
         for ind in dora_indicators {
-            if current_tile == crate::scoring::get_dora_from_indicator(ind) {
+            if current_tile == get_dora_from_indicator(ind) {
                 is_dora = true;
                 break;
             }
@@ -521,7 +533,7 @@ pub fn evaluate_discard(
 
         // shanten is scaled by 1000 so it dominates ukeire (which can go to tens or hundreds)
         // lower is better
-        let score = (shanten * 1000) - ukeire_count + penalty;
+        let score = (shanten * 1000) - ukeire_count + penalty + furiten_penalty;
 
         if score < best_score {
             best_score = score;
