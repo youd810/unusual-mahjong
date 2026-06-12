@@ -15,6 +15,8 @@ pub enum TurnState {
     AccusationWindow,
     RoundEnd,
     Execution,
+    MatchTransition, 
+    HumanDeadMenu,
     GameOver,
 }
 

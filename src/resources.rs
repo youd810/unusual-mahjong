@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use crate::core::*;
-use crate::components::*;
 use crate::states::*;
 use crate::scoring::*;
 use rand::RngExt;
@@ -8,6 +7,7 @@ use rand::RngExt;
 
 #[derive(Resource)]
 pub struct GameState {
+    pub match_phase: MatchPhase,
     pub rounds: u8,
     pub honba: u8,
     pub bakaze: Wind,
@@ -17,6 +17,13 @@ pub struct GameState {
     pub pending_kan_dora: bool,
     pub pending_rinshan: bool,
 }
+
+// if match phase ended naturally
+#[derive(Resource)]
+pub struct MatchEndPending;
+
+#[derive(Resource, Default)]
+pub struct SimulationMode;
 
 #[derive(Resource)]
 pub struct CurrentTurn(pub Entity); // id of the current tsumo

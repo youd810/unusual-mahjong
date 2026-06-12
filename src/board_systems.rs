@@ -16,9 +16,14 @@ pub fn blackout_check_system(
     mut timer: ResMut<BlackoutCheckTimer>,
     state: Res<State<TurnState>>,
     query: Query<(Entity, &Kawa)>,
+    sim: Option<Res<SimulationMode>>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
 ) {
+    if sim.is_some() {
+        return;
+    }
+
     timer.0.tick(time.delta());
     if !timer.0.just_finished() {
         return;
@@ -87,6 +92,7 @@ pub fn resolve_accusation(
     cheat_log: Res<CheatLog>,
     human_query: Query<Has<HumanPlayer>>,
     pre_blackout: Res<PreBlackoutState>,
+    game: Res<GameState>,
     mut revolver: ResMut<Revolver>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut eliminated_writer: MessageWriter<PlayerEliminatedMessage>,
@@ -130,9 +136,14 @@ pub fn resolve_accusation(
 
         if is_human {
             println!("ゲーム終了\nYou died.");
-            next_state.set(TurnState::GameOver);
-            return;
         }
+
+        match game.match_phase {
+            MatchPhase::Nima => next_state.set(TurnState::GameOver),
+            _ => next_state.set(TurnState::MatchTransition),
+        }
+        return;
+
     } else {
         println!("*click* {} survives.", target);
 
@@ -224,6 +235,7 @@ pub fn build_shot_queue(
 pub fn process_shot_queue(
     mut queue_opt: Option<ResMut<ExecuteQueue>>,
     mut revolver: ResMut<Revolver>,
+    game: Res<GameState>,
     human_query: Query<Has<HumanPlayer>>,
     mut eliminated_writer: MessageWriter<PlayerEliminatedMessage>,
     mut survived_writer: MessageWriter<SurvivedShotMessage>,
@@ -270,14 +282,14 @@ pub fn process_shot_queue(
 
             if is_human {
                 println!("ゲーム終了\nYou died.");
-                commands.remove_resource::<ExecuteQueue>();
-                commands.remove_resource::<PendingTargetSelection>();
-                commands.remove_resource::<RoundOutcome>();
-                next_state.set(TurnState::GameOver);
-                return;
             }
 
-            break;
+            match game.match_phase {
+                MatchPhase::Nima => next_state.set(TurnState::GameOver),
+                _ => next_state.set(TurnState::MatchTransition),
+            }
+            return;
+
         } else {
             println!("*click* \n{} survives. (chamber now {}/{})",
                 shot.target, revolver.chamber, revolver.bullet);
@@ -380,6 +392,7 @@ pub fn check_ryuukyoku(
     mut points_query: Query<(Entity, &mut Points, Has<Oya>)>,
     oya_tenpai_query: Single<Has<Tenpai>, With<Oya>>,
     wall: Res<Wall>,
+    game: Res<GameState>,
     round_result: Option<Res<RoundResult>>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut commands: Commands,
@@ -409,7 +422,7 @@ pub fn check_ryuukyoku(
 
                 // treat as tsumo
                 let score = calculate_score(result.total_han, 
-                    result.total_fu, is_candidate_oya, true, false, &result.yaku_names);
+                    result.total_fu, is_candidate_oya, true, false, &result.yaku_names, game.match_phase);
 
                 for (player, mut points, is_oya) in points_query.iter_mut() {
                     if player == nagashi_candidate {
@@ -605,6 +618,7 @@ pub fn declare_ron(
             false,
             ron_option.result.is_yakuman,
             &ron_option.result.yaku_names,
+            game.match_phase,
         );
 
         if let Ok([mut winner_pts, mut loser_pts]) =
@@ -808,6 +822,7 @@ pub fn declare_tsumo(
             true,
             message.result.is_yakuman,
             &message.result.yaku_names,
+            game.match_phase,
         );
 
         // TODO: leave dead players out of the equation
@@ -1662,6 +1677,7 @@ pub fn start_game(
 
     commands.insert_resource(
         GameState { 
+            match_phase: MatchPhase::Yonma,
             rounds: 1,  
             honba: 0,
             bakaze: Wind::East, 
@@ -1820,10 +1836,11 @@ pub fn next_turn(
     mut current_turn: ResMut<CurrentTurn>,
     query: Query<(Entity, &Jikaze), With<Alive>>,
     mut game: ResMut<GameState>,
+    wall: Res<Wall>, 
     round_result: Option<Res<RoundResult>>,
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
-    if round_result.is_some() { return; }
+    if round_result.is_some() || wall.0.is_empty() { return; }
 
     if let Ok((_, current_jikaze)) = query.get(current_turn.0) {
         let mut wind = current_jikaze.0.next_turn_wind();
@@ -1944,7 +1961,8 @@ pub fn round_cleanup(
     mut game: ResMut<GameState>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
-    outcome: Option<Res<RoundOutcome>>
+    outcome: Option<Res<RoundOutcome>>,
+    match_end: Option<Res<MatchEndPending>>
 ) {
     match &result.0 {
         RoundEndReason::OyaWin => println!("Round end: Oya win (renchan)"),
@@ -1965,7 +1983,24 @@ pub fn round_cleanup(
         },
         RoundEndReason::NonOyaWin | RoundEndReason::RyuukyokuOyaNoten => { 
             game.honba = 0;
-            if game.bakaze == Wind::East && game.rounds == 4 {
+
+            let max_rounds = match game.match_phase {
+                MatchPhase::Yonma => 4,
+                MatchPhase::Sanma => 3,
+                MatchPhase::Nima => 2,
+            };
+
+            if game.bakaze == Wind::South && game.rounds == max_rounds {
+                match game.match_phase {
+                    MatchPhase::Yonma | MatchPhase::Sanma => {
+                        commands.insert_resource(MatchEndPending);
+                    }
+                    MatchPhase::Nima => {
+                        game.bakaze = Wind::East;
+                        game.rounds = 1;
+                    }
+                }
+            } else if game.bakaze == Wind::East && game.rounds == max_rounds {
                 game.bakaze = Wind::South;
                 game.rounds = 1;
             } else {
@@ -2033,6 +2068,119 @@ pub fn round_cleanup(
 
     if outcome.is_some() {
         next_state.set(TurnState::Execution);
+    } else if match_end.is_some() {
+        next_state.set(TurnState::MatchTransition);
+    } else {
+        next_state.set(TurnState::StartNewRound);
+    }
+}
+
+
+pub fn match_transition(
+    mut game: ResMut<GameState>,
+    mut alive_query: Query<(Entity, &mut Points, &mut Jikaze, Has<HumanPlayer>), With<Alive>>,
+    tile_query: Query<Entity, With<DiscardedTile>>,
+    mut revolver: ResMut<Revolver>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<TurnState>>,
+) {
+    let expected_players: usize = match game.match_phase {
+        MatchPhase::Yonma => 4,
+        MatchPhase::Sanma => 3,
+        MatchPhase::Nima => unreachable!(),
+    };
+
+    // sort by points desc, tiebreak by seat priority asc (lower = better)
+    let mut alive: Vec<(Entity, i32, u8, bool)> = alive_query.iter()
+        .map(|(player, points, jikaze, is_human)| (player, points.0, jikaze.0.to_num(), is_human))
+        .collect();
+    alive.sort_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(&b.2)));
+
+    let mut human_eliminated = false;
+
+    // natural end: eliminate lowest scorer
+    if alive.len() == expected_players {
+        let (loser, _, _, is_human) = alive.pop().unwrap();
+
+        commands.entity(loser).remove::<Alive>();
+        commands.entity(loser).remove::<Hand>();
+        commands.entity(loser).remove::<OpenMentsu>();
+        commands.entity(loser).remove::<Kawa>();
+        commands.entity(loser).remove::<ClosedHand>();
+        commands.entity(loser).remove::<Tenpai>();
+        commands.entity(loser).remove::<Riichi>();
+        commands.entity(loser).remove::<Ippatsu>();
+        commands.entity(loser).remove::<DoubleRiichi>();
+        commands.entity(loser).remove::<Furiten>();
+        commands.entity(loser).remove::<DrawnTile>();
+        commands.entity(loser).remove::<Oya>();
+
+        if is_human { human_eliminated = true; }
+    }
+
+    // advance phase
+    let new_phase = match game.match_phase {
+        MatchPhase::Yonma => MatchPhase::Sanma,
+        MatchPhase::Sanma => MatchPhase::Nima,
+        MatchPhase::Nima => unreachable!(),
+    };
+
+    // redistribute points
+    let pool = 30000 * alive.len() as i32;
+    let cuts: &[i32] = match new_phase {
+        MatchPhase::Sanma => &[40, 32, 28],
+        MatchPhase::Nima => &[60, 40],
+        MatchPhase::Yonma => unreachable!(),
+    };
+
+    let seats: &[Wind] = match new_phase {
+        MatchPhase::Sanma => &[Wind::East, Wind::South, Wind::West],
+        MatchPhase::Nima => &[Wind::East, Wind::South],
+        MatchPhase::Yonma => unreachable!(),
+    };
+
+    for (i, (entity, _, _, _)) in alive.iter().enumerate() {
+        let new_points = pool * cuts[i] / 100;
+        if let Ok((_, mut points, mut jikaze, _)) = alive_query.get_mut(*entity) {
+            points.0 = new_points;
+            jikaze.0 = seats[i];
+        }
+
+        if i == 0 {
+            commands.entity(*entity).insert(Oya);
+        } else {
+            commands.entity(*entity).remove::<Oya>();
+        }
+    }
+
+    // reset game state
+    game.match_phase = new_phase;
+    game.bakaze = Wind::East;
+    game.rounds = 1;
+    game.honba = 0;
+    game.calls_made = false;
+    game.riichi_points = 0;
+    game.pending_kan_dora = false;
+    game.pending_rinshan = false;
+
+    *revolver = Revolver::new();
+    commands.insert_resource(CurrentTurn(alive[0].0));
+
+    // cleanup leftovers
+    for tile in tile_query.iter() {
+        commands.entity(tile).despawn();
+    }
+    commands.remove_resource::<MatchEndPending>();
+    commands.remove_resource::<RoundResult>();
+    commands.remove_resource::<RoundOutcome>();
+    commands.remove_resource::<RoundSummary>();
+    commands.remove_resource::<ExecuteQueue>();
+    commands.remove_resource::<PendingTargetSelection>();
+
+    let human_alive = alive.iter().any(|(_, _, _, is_human)| *is_human);
+
+    if human_eliminated || !human_alive {
+        next_state.set(TurnState::HumanDeadMenu);
     } else {
         next_state.set(TurnState::StartNewRound);
     }
@@ -2043,6 +2191,7 @@ pub fn game_cleanup(
     mut commands: Commands,
     players: Query<Entity, With<PlayerTag>>,
     tiles: Query<Entity, Or<(With<DiscardedTile>, With<CurrentDiscard>)>>,
+    mut time: ResMut<Time<Virtual>>,
 ) {
     for entity in &players { commands.entity(entity).despawn(); }
     for entity in &tiles { commands.entity(entity).despawn(); }
@@ -2057,4 +2206,6 @@ pub fn game_cleanup(
     commands.remove_resource::<PreBlackoutState>();
     commands.remove_resource::<CheatLog>();
     commands.remove_resource::<BlackoutTimer>();
+    commands.remove_resource::<SimulationMode>();
+    time.set_relative_speed(1.0);
 }

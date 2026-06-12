@@ -141,79 +141,79 @@ pub fn calculate_fu(
 }
 
 
-pub fn calculate_score(han: u8, fu: u8, is_oya: bool, is_tsumo: bool, is_yakuman: bool, yaku_names: &[String]) -> ScorePayout {
-    if is_yakuman {
-        if is_oya { 
-            if is_tsumo {
-                return ScorePayout {
-                    total_won: (yaku_names.len() * 48000) as u32, // TODO: multiple by 3 (no this stays the same)
-                    oya_pays: 0,
-                    non_oya_pays: (yaku_names.len() * 48000 / 3) as u32,
-                }; 
-            } else {
-                return ScorePayout {
-                    total_won: (yaku_names.len() * 48000) as u32,
-                    oya_pays: 0,
-                    non_oya_pays: (yaku_names.len() * 48000) as u32,
-                };
+pub fn calculate_score(
+    han: u8,
+    fu: u8,
+    is_oya: bool,
+    is_tsumo: bool,
+    is_yakuman: bool,
+    yaku_names: &[String],
+    match_phase: MatchPhase,
+) -> ScorePayout {
+    let base = if is_yakuman {
+        8000 * yaku_names.len() as u32
+    } else {
+        let b = fu as u32 * 2_u32.pow((han + 2).into());
+        if b > 2000 || han > 5 || (han >= 4 && fu >= 40) || (han >= 3 && fu >= 70) {
+            match han {
+                0..=5 => 2000,
+                6..=7 => 3000,
+                8..=10 => 4000,
+                11..=12 => 6000,
+                _ => 8000,
             }
-        } else { 
-            if is_tsumo {
-                return ScorePayout {
-                    total_won: (yaku_names.len() * 32000) as u32,
-                    oya_pays: (yaku_names.len() * 32000 / 2) as u32,
-                    non_oya_pays: ((yaku_names.len() * 32000 / 2) / 2) as u32,
-                }; 
-            } else {
-                return ScorePayout {
-                    total_won: (yaku_names.len() * 32000) as u32,
-                    oya_pays: 0,
-                    non_oya_pays: (yaku_names.len() * 32000) as u32,
-                }; 
-            }
-           
-        } 
-    }
-
-    // https://riichi.wiki/Japanese_mahjong_scoring_rules
-    // vanilla: base = fu as u32 * 2_u32.pow((han + 2 ).into());
-    let mut base = fu as u32 * 2_u32.pow((han + 2 ).into()); 
-
-    if base > 2000 || han > 5 || (han >= 4 && fu >= 40) || (han >= 3 && fu >= 70) {
-        match han {
-            0..=5 => base = 2000,
-            6..=7 => base = 3000,
-            8..=10 => base = 4000,
-            11..=12 => base = 6000,
-            _ =>  base = 8000, // ? this is probably unnecessary
+        } else {
+            b
         }
-    }
+    };
 
-    if is_oya && is_tsumo {
+    if is_tsumo {
         let non_oya_payout = (base * 2).div_ceil(100) * 100;
-        ScorePayout{
-            total_won: non_oya_payout * 3,
-            oya_pays: 0,
-            non_oya_pays: non_oya_payout,
-        }
-    } else if is_oya && !is_tsumo {
-        let ron_payout = (base * 6).div_ceil(100) * 100;
-        ScorePayout{
-            total_won: ron_payout,
-            oya_pays: 0,
-            non_oya_pays: ron_payout,
-        }
-    } else if  !is_oya && is_tsumo {
         let oya_payout = (base * 2).div_ceil(100) * 100;
-        let non_oya_payout = base.div_ceil(100) * 100;
-        ScorePayout{
-            total_won: oya_payout + (non_oya_payout * 2),
-            oya_pays: oya_payout,
-            non_oya_pays: non_oya_payout,
+        let ko_payout = base.div_ceil(100) * 100;
+
+        if match_phase == MatchPhase::Nima {
+            // nima: yonma total / 2, single opponent pays everything
+            let yonma_total = if is_oya {
+                non_oya_payout * 3
+            } else {
+                oya_payout + ko_payout * 2
+            };
+            let nima_total = yonma_total / 2;
+            ScorePayout {
+                total_won: nima_total,
+                oya_pays: if is_oya { 0 } else { nima_total },
+                non_oya_pays: if is_oya { nima_total } else { 0 },
+            }
+        } else {
+            let payers_count = match match_phase {
+                MatchPhase::Yonma => 3,
+                MatchPhase::Sanma => 2,
+                _ => unreachable!(),
+            };
+
+            if is_oya {
+                ScorePayout {
+                    total_won: non_oya_payout * payers_count,
+                    oya_pays: 0,
+                    non_oya_pays: non_oya_payout,
+                }
+            } else {
+                let non_oya_payers = payers_count - 2; // subtract oya and self
+                ScorePayout {
+                    total_won: oya_payout + (ko_payout * non_oya_payers),
+                    oya_pays: oya_payout,
+                    non_oya_pays: ko_payout,
+                }
+            }
         }
     } else {
-        let ron_payout = (base * 4).div_ceil(100) * 100;
-        ScorePayout{
+        let ron_payout = if is_oya {
+            (base * 6).div_ceil(100) * 100
+        } else {
+            (base * 4).div_ceil(100) * 100
+        };
+        ScorePayout {
             total_won: ron_payout,
             oya_pays: ron_payout,
             non_oya_pays: ron_payout,

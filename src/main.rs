@@ -180,6 +180,11 @@ fn main() {
             .after(declare_ron)
             .after(declare_tsumo)
         )
+        // match phase transition
+        .add_systems(OnEnter(TurnState::MatchTransition), match_transition)
+        // winner reveal
+        .add_systems(EguiPrimaryContextPass,human_dead_menu_ui_system
+            .run_if(in_state(TurnState::HumanDeadMenu)))
         // game over ui
         .add_systems(EguiPrimaryContextPass, game_over_ui_system
             .run_if(in_state(TurnState::GameOver)))

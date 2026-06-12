@@ -6,6 +6,13 @@ use crate::scoring::*;
 use crate::resources::*;
 use crate::messages::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchPhase {
+    Yonma, // 4 players
+    Sanma, // 3
+    Nima,  // 2
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub enum Tile {
     Man(u8),

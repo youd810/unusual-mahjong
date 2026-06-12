@@ -963,3 +963,34 @@ pub fn game_over_ui_system(
             }
         });
 }
+
+
+pub fn human_dead_menu_ui_system(
+    mut contexts: EguiContexts,
+    mut next_state: ResMut<NextState<TurnState>>,
+    mut commands: Commands,
+    mut time: ResMut<Time<Virtual>>, // Used to manipulate game speed
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    egui::Window::new("You Died")
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label("You have been eliminated.");
+
+            ui.separator();
+
+            if ui.button("Reveal the Winner (Fast Forward)").clicked() {
+                time.set_relative_speed(100.0);
+                commands.insert_resource(SimulationMode);
+                next_state.set(TurnState::StartNewRound);
+            }
+
+            if ui.button("Restart Match").clicked() {
+                next_state.set(TurnState::Setup);
+            }
+        });
+}
+

@@ -676,7 +676,7 @@ pub fn bot_main_phase_system(
                 } else {
                     // cheap hand ( <4 han)
                     if max_wait_types <= 1 {
-                        if someone_riichi && effective_aggressiveness < 0.4 {
+                        if someone_riichi && effective_aggressiveness <= 0.4 {
                             should_riichi = false;
                         } else if effective_aggressiveness < 0.2 {
                             should_riichi = false; // tegawari
