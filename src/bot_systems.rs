@@ -601,6 +601,7 @@ pub fn bot_call_system(
 }
 
 
+// TODO nukidora doesn't work on bots
 pub fn bot_main_phase_system(
     query: Query<(
         Entity,
@@ -696,6 +697,8 @@ pub fn bot_main_phase_system(
 
             if should_riichi {
                 commands.entity(player).insert(RiichiSelecting);
+                commands.entity(player).remove::<AnkanOption>();
+                commands.entity(player).remove::<ShouminkanOption>();
             }
         }
         else if let Some(a) = ankan {
@@ -705,6 +708,8 @@ pub fn bot_main_phase_system(
         } else if kyuushu.is_some() {
             kyuushu_writer.write(DeclareKyuushuMessage { player });
         }
+
+        
     }
 }
 

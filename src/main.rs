@@ -37,11 +37,15 @@ fn main() {
         .init_resource::<BlackoutTileSelection>()
         .init_resource::<CheatLog>()
         .init_resource::<Omniscience>()
+        // replay related
+        .add_systems(Update, toggle_vsync)
+        .add_systems(Update, log_event_system)
         // messages
         .add_message::<DiscardTileMessage>()
         .add_message::<DeclarePonMessage>()
         .add_message::<DeclareChiMessage>()
         .add_message::<DeclareKanMessage>()
+        .add_message::<DeclareNukidoraMessage>()
         .add_message::<DeclareRiichiMessage>()
         .add_message::<DeclareTsumoMessage>()
         .add_message::<DeclareKyuushuMessage>()
@@ -74,12 +78,14 @@ fn main() {
             kyuushu_check,
             ankan_check,
             shouminkan_check,
+            nukidora_check,
         ).chain())
         .add_systems(Update, (
             declare_tsumo,
             declare_riichi,
             declare_kyuushu,
             declare_drawn_kan,
+            declare_nukidora,
             bot_main_phase_system,
             bot_discard_system,
             discard_tile,

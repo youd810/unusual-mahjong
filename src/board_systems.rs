@@ -2120,6 +2120,8 @@ pub fn round_cleanup(
         commands.entity(player).remove::<AnkanOption>();
         commands.entity(player).remove::<ShouminkanOption>();
         commands.entity(player).remove::<RiichiOption>();
+        commands.entity(player).remove::<DoubleRiichi>();
+        commands.entity(player).remove::<Ippatsu>();
         commands.entity(player).remove::<KyuushuOption>();  
 
         commands.entity(player).insert(ClosedHand);
@@ -2273,3 +2275,42 @@ pub fn game_cleanup(
     commands.remove_resource::<SimulationMode>();
     time.set_relative_speed(1.0);
 }
+
+
+pub fn toggle_vsync(
+    simulation: Option<Res<SimulationMode>>,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+) {
+    let Ok(mut window) = windows.single_mut() else { return };
+    if simulation.is_some() {
+        if window.present_mode != PresentMode::AutoNoVsync {
+            window.present_mode = PresentMode::AutoNoVsync;
+        }
+    } else {
+        if window.present_mode != PresentMode::Fifo {
+            window.present_mode = PresentMode::Fifo;
+        }
+    }
+}
+
+pub fn log_event_system(
+    mut discard_events: MessageReader<DiscardTileMessage>,
+    mut pon_events: MessageReader<DeclarePonMessage>,
+    state: Res<State<TurnState>>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
+) {
+    // only log if not in human dead menu fast forward
+    if *state.get() == TurnState::HumanDeadMenu { return; }
+
+    let Some(mut replay_log) = replay_log else { return };
+
+    for ev in discard_events.read() {
+        replay_log.events.push(format!("Discard: Player {:?} discarded {:?}", ev.player, ev.tile));
+    }
+    for ev in pon_events.read() {
+        replay_log.events.push(format!("Call: Player {:?} called Pon on {:?}", ev.player, ev.tile));
+    }
+    // TODO: add more
+}
+
+
