@@ -174,17 +174,18 @@ pub fn main_phase_ui_system(
         Option<&AnkanOption>,
         Option<&ShouminkanOption>,
         Option<&KyuushuOption>,
+        Option<&NukidoraOption>,
     ), With<HumanPlayer>>,
     mut tsumo_writer: MessageWriter<DeclareTsumoMessage>,
     mut kan_writer: MessageWriter<DeclareKanMessage>,
     mut kyuushu_writer: MessageWriter<DeclareKyuushuMessage>,
+    mut nuki_writer: MessageWriter<DeclareNukidoraMessage>,
     mut commands: Commands,
 ) {
-    let Ok(ctx) = contexts.ctx_mut() else { return; };
+    let Ok(ctx) = contexts.ctx_mut() else { return };
 
-    for (player, tsumo, riichi, ankan, shouminkan, kyuushu) in &query {
-
-        if tsumo.is_none() && riichi.is_none() && ankan.is_none() && shouminkan.is_none() && kyuushu.is_none() {
+    for (player, tsumo, riichi, ankan, shouminkan, kyuushu, nuki) in &query {
+        if tsumo.is_none() && riichi.is_none() && ankan.is_none() && shouminkan.is_none() && kyuushu.is_none() && nuki.is_none() {
             continue;
         }
 
@@ -192,6 +193,9 @@ pub fn main_phase_ui_system(
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-50.0, -50.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    if let Some(n) = nuki && ui.button(format!("Nuki {:?}", n.0[0])).clicked() {
+                        nuki_writer.write(DeclareNukidoraMessage { player, tile: n.0[0] });
+                    }
                     if let Some(t) = tsumo && ui.button("Tsumo").clicked() {
                         tsumo_writer.write(DeclareTsumoMessage { player, result: t.result.to_owned() });
                     }
@@ -237,30 +241,25 @@ pub fn info_display_ui_system(
     dead_wall: Res<DeadWall>,
     current_turn: Res<CurrentTurn>,
     player_query: Query<(
-        Entity,
-        &Points,
-        &Jikaze,
-        &Hand,
-        &Kawa,
-        &OpenMentsu,
-        Has<HumanPlayer>,
-        Has<Riichi>,
-        Has<Oya>,
-        Has<Alive>,
+        Entity, &Points, &Jikaze, &Hand, &Kawa, &OpenMentsu, &NukedTiles,
+        Has<HumanPlayer>, Has<Riichi>, Has<Oya>, Has<Alive>,
     ), With<PlayerTag>>,
     omniscience: Res<Omniscience>
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
 
-    // round info
     egui::Window::new("Round Info")
         .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 10.0))
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
-            ui.label(format!("{:?} {} | Honba: {} | Wall: {}",
-                game.bakaze, game.rounds, game.honba, wall.0.len()));
-            ui.label(format!("Riichi pool: {}", game.riichi_points));
+            let match_str = match game.match_phase {
+                MatchPhase::Yonma => "Yonma",
+                MatchPhase::Sanma => "Sanma",
+                MatchPhase::Nima => "Nima",
+            };
+            ui.label(format!("{} {:?} {} | Honba: {} | Wall: {}",
+                match_str, game.bakaze, game.rounds, game.honba, wall.0.len()));
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label("Dora:");
@@ -281,14 +280,14 @@ pub fn info_display_ui_system(
 
     // players
     let mut players: Vec<_> = player_query.iter().collect();
-    players.sort_by_key(|(_, _, jikaze, _, _, _, _, _, _, _)| jikaze.0.to_num());
+    players.sort_by_key(|(_, _, jikaze, _, _, _, _, _, _, _, _)| jikaze.0.to_num());
 
     egui::Window::new("Players")
         .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 160.0))
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
-            for (player, points, jikaze, hand, kawa, open, is_human, is_riichi, is_oya, is_alive) in &players {
+            for (player, points, jikaze, hand, kawa, open, nuked_tiles, is_human, is_riichi, is_oya, is_alive) in &players {
                 let is_current = *player == current_turn.0;
 
                 let mut label = String::new();
@@ -327,6 +326,15 @@ pub fn info_display_ui_system(
                                         Mentsu::Jantou(_) => String::new(),
                                     };
                                     if !text.is_empty() { ui.label(text); }
+                                }
+                            });
+                        }
+
+                        if !nuked_tiles.0.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Nukidora:");
+                                for tile in &nuked_tiles.0 {
+                                    ui.label(format!("{:?}", tile));
                                 }
                             });
                         }
@@ -963,3 +971,34 @@ pub fn game_over_ui_system(
             }
         });
 }
+
+
+pub fn human_dead_menu_ui_system(
+    mut contexts: EguiContexts,
+    mut next_state: ResMut<NextState<TurnState>>,
+    mut commands: Commands,
+    mut time: ResMut<Time<Virtual>>, // Used to manipulate game speed
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    egui::Window::new("You Died")
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label("You have been eliminated.");
+
+            ui.separator();
+
+            if ui.button("Reveal the Winner (Fast Forward)").clicked() {
+                time.set_relative_speed(100.0);
+                commands.insert_resource(SimulationMode);
+                next_state.set(TurnState::StartNewRound);
+            }
+
+            if ui.button("Restart Match").clicked() {
+                next_state.set(TurnState::Setup);
+            }
+        });
+}
+

@@ -6,6 +6,13 @@ use crate::scoring::*;
 use crate::resources::*;
 use crate::messages::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchPhase {
+    Yonma, // 4 players
+    Sanma, // 3
+    Nima,  // 2
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub enum Tile {
     Man(u8),
@@ -799,6 +806,7 @@ pub fn can_declare_ron(
     discard_tile: &Tile,
     hand: &[Tile],
     open_mentsu: &[Mentsu],
+    nuked_tiles: &[Tile],
     tenpai: &Tenpai,
     is_hand_closed: bool,
     is_oya: bool,
@@ -835,12 +843,11 @@ pub fn can_declare_ron(
         }
     }
 
-    // yaku validation
-    let yaku_result = evaluate_yaku(
+    let mut yaku_result = evaluate_yaku(
         &results,
         hand,
-        &raw_hand_plus_win,   // this shouldn't be raw hand only
-        &combined_hand,      // combined hand
+        &raw_hand_plus_win,
+        &combined_hand,
         open_mentsu,
         is_hand_closed,
         is_oya,
@@ -849,21 +856,22 @@ pub fn can_declare_ron(
         is_ippatsu,
         bakaze,
         jikaze,
-        kawa,                             // for tenhou/chiihou
+        kawa, // for tenhou/chiihou
         discard_tile,
-        false,                 // is_tsumo, ron is never tsumo
-        false,              // is_rinshan, ron is never rinshan
-        is_chankan,          
+        false, // ron != tsumo
+        false, // ron can't be rinshan
+        is_chankan,
         wall,
         dead_wall,
-        calls_made);
-        
+        calls_made,
+        nuked_tiles
+    );
+
     if yaku_result.yaku_names.is_empty() {
         None
     } else {
         Some(yaku_result)
-    } 
-
+    }
 }
 
 
@@ -872,6 +880,7 @@ pub fn can_declare_tsumo(
     drawn_tile: &Tile,
     hand: &[Tile],
     open_mentsu: &[Mentsu],
+    nuked_tiles: &[Tile],
     tenpai: &Tenpai,
     is_hand_closed: bool,
     is_oya: bool,
@@ -907,12 +916,11 @@ pub fn can_declare_tsumo(
         }
     }
 
-    // yaku validation
-    let yaku_result = evaluate_yaku(
+    let mut yaku_result = evaluate_yaku(
         &results,
         hand,
-        &raw_hand_plus_win,            
-        &combined_hand,      
+        &raw_hand_plus_win,
+        &combined_hand,
         open_mentsu,
         is_hand_closed,
         is_oya,
@@ -921,27 +929,29 @@ pub fn can_declare_tsumo(
         is_ippatsu,
         bakaze,
         jikaze,
-        kawa,                             // for tenhou/chiihou
+        kawa,
         drawn_tile,
-        true,                
-        is_rinshan,              
-        false,          // is_chankan, tsumo can't chankan
+        true, // tsumo is tsumo
+        is_rinshan,
+        false, // tsumo can't chankan 
         wall,
         dead_wall,
-        calls_made);
-    
+        calls_made,
+        nuked_tiles
+    );
+
     if yaku_result.yaku_names.is_empty() {
         None
     } else {
         Some(yaku_result)
     }
-
 }
 
 
 pub fn best_potential_result(
     hand: &[Tile],
     open_mentsu: &[Mentsu],
+    nuked_tiles: &[Tile],
     tenpai: Option<&Tenpai>,
     is_closed: bool,
     is_oya: bool,
@@ -972,12 +982,12 @@ pub fn best_potential_result(
         for tile in &tenpai.0 {
             if full_visible[tile_to_index(tile)] >= 4 { continue; }
             if let Some(result) = can_declare_tsumo(
-                tile, hand, open_mentsu, tenpai,
+                tile, hand, open_mentsu, nuked_tiles, tenpai,
                 is_closed, is_oya, kawa,
                 is_riichi, is_double_riichi, is_ippatsu,
                 bakaze, jikaze, wall, dead_wall,
                 false, calls_made,
-            ) 
+            )
             && best.as_ref().is_none_or(|b| is_better(&result, b)) {
                 best = Some(result);
             }
@@ -1017,12 +1027,12 @@ pub fn best_potential_result(
                 for wait in &temp_tenpai.0 {
                     if full_visible[tile_to_index(wait)] >= 4 { continue; }
                     if let Some(result) = can_declare_tsumo(
-                        wait, &after_discard, open_mentsu, &temp_tenpai,
+                        wait, &after_discard, open_mentsu, nuked_tiles, &temp_tenpai,
                         is_closed, is_oya, kawa,
                         is_riichi, is_double_riichi, is_ippatsu,
                         bakaze, jikaze, wall, dead_wall,
                         false, calls_made,
-                    ) 
+                    )
                     && best.as_ref().is_none_or(|b| is_better(&result, b)) {
                         best = Some(result);
                     }
@@ -1039,6 +1049,7 @@ pub fn build_loser_tilt_info(
     player: Entity,
     hand: &Hand,
     open_mentsu: &OpenMentsu,
+    nuked_tiles: &NukedTiles,
     tenpai: Option<&Tenpai>,
     kawa: &Kawa,
     jikaze: &Jikaze,
@@ -1054,7 +1065,7 @@ pub fn build_loser_tilt_info(
     visible_tiles: &[u8; 34],
 ) -> LoserTiltInfo {
     let best = best_potential_result(
-        &hand.0, &open_mentsu.0, tenpai,
+        &hand.0, &open_mentsu.0, &nuked_tiles.0, tenpai,
         is_closed, is_oya, kawa,
         is_riichi, is_double_riichi, is_ippatsu,
         bakaze, &jikaze.0, wall, dead_wall,

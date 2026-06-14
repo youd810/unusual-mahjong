@@ -239,3 +239,10 @@ pub struct DaiminkanDeclared;
 
 #[derive(Component)]
 pub struct ChiDeclared(pub ChiTilePos);
+
+#[derive(Component)]
+pub struct NukedTiles(pub Vec<Tile>);
+
+#[derive(Component)]
+pub struct NukidoraOption(pub Vec<Tile>);
+
