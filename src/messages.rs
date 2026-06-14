@@ -23,6 +23,12 @@ pub struct DeclareKanMessage {
 }
 
 #[derive(Message)]
+pub struct DeclareNukidoraMessage {
+    pub player: Entity,
+    pub tile: Tile,
+}
+
+#[derive(Message)]
 pub struct DeclareRiichiMessage {
     pub player: Entity,
     pub tile: Tile,
