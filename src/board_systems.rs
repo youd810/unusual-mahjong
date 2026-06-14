@@ -475,18 +475,10 @@ pub fn check_ryuukyoku(
 // runs once upon entering CallWindow 
 pub fn ron_check(
     query: Query<(
-        Entity, 
-        &Hand, 
-        &OpenMentsu, 
-        &Tenpai, 
-        &Kawa, 
-        &Jikaze, 
-        Has<ClosedHand>, 
-        Has<Oya>, 
-        Has<Riichi>, 
-        Has<Ippatsu>, 
-        Has<DoubleRiichi>, 
-        Has<Furiten>
+        Entity, &Hand, 
+        &OpenMentsu, &NukedTiles, 
+        &Tenpai, &Kawa, &Jikaze,
+        Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>, Has<Furiten>
     )>,
     discard_query: Query<(&DiscardedTile, &DiscardedBy, Has<Chankan>), With<CurrentDiscard>>,
     game: Res<GameState>,
@@ -498,29 +490,16 @@ pub fn ron_check(
         return;
     };
 
-    for (player, hand, open_mentsu, tenpai, kawa, jikaze,
+    for (player, hand, open_mentsu, nuked_tiles, tenpai, kawa, jikaze,
          is_closed, is_oya, is_riichi, is_ippatsu, is_double, has_temp_furiten) in &query
     {
         if player == discarded_by.0 { continue; }
 
         if let Some(result) = can_declare_ron(
-            &discarded_tile.0, 
-            &hand.0, 
-            &open_mentsu.0, 
-            tenpai,
-            is_closed, 
-            is_oya, 
-            kawa,
-            is_riichi, 
-            is_double, 
-            is_ippatsu,
-            &game.bakaze, 
-            &jikaze.0,
-            &*wall, 
-            &*dead_wall,
-            is_chankan, 
-            game.calls_made,
-            has_temp_furiten
+            &discarded_tile.0, &hand.0, &open_mentsu.0, &nuked_tiles.0, tenpai,
+            is_closed, is_oya, kawa, is_riichi, is_double, is_ippatsu,
+            &game.bakaze, &jikaze.0, &*wall, &*dead_wall,
+            is_chankan, game.calls_made, has_temp_furiten
         ) {
             commands.entity(player).insert(RonOption {
                 discarded_by: discarded_by.0,
@@ -540,7 +519,7 @@ pub fn declare_ron(
     jikaze_query: Query<&Jikaze>,
     mut points_query: Query<&mut Points>,
     loser_query: Query<(
-        &Hand, &OpenMentsu, Option<&Tenpai>, &Kawa, &Jikaze,
+        &Hand, &OpenMentsu, &NukedTiles, Option<&Tenpai>, &Kawa, &Jikaze,
         Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>,
     )>,
     visible_query: Query<(Entity, &Kawa, &OpenMentsu)>,
@@ -646,11 +625,11 @@ pub fn declare_ron(
     }
 
     // sends tilt message
-    if let Ok((hand, open, tenpai, kawa, jikaze,
+    if let Ok((hand, open, nuked_tiles, tenpai, kawa, jikaze,
               is_closed, is_oya, is_riichi, is_ippatsu, is_double)) = loser_query.get(loser)
     {
         let loser_tilt = build_loser_tilt_info(
-            loser, hand, open, tenpai, kawa, jikaze,
+            loser, hand, open, nuked_tiles, tenpai, kawa, jikaze, // PASSED nuked_tiles
             is_closed, is_oya, is_riichi, is_double, is_ippatsu,
             &game.bakaze, &*wall, &*dead_wall, game.calls_made, &visible_tiles,
         );
@@ -757,38 +736,27 @@ pub fn tsumo_check(
     current_turn: Res<CurrentTurn>,
     query: Query<(
         &Hand, &OpenMentsu, 
-        &Tenpai, &Kawa, 
-        &Jikaze, &DrawnTile, 
+        &NukedTiles,
+        &Tenpai, &Kawa,
+        &Jikaze, &DrawnTile,
         Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>, Has<DrawnFromRinshan>)>,
     game: Res<GameState>,
     wall: Res<Wall>,
     dead_wall: Res<DeadWall>,
     mut commands: Commands,
 ) {
-    if let Ok((hand, open_mentsu, tenpai, kawa, jikaze, drawn,
+    if let Ok((hand, open_mentsu, nuked_tiles, tenpai, kawa, jikaze, drawn,
               is_closed, is_oya, is_riichi, is_ippatsu, is_double, is_rinshan)) = query.get(current_turn.0)
-    
+
         && let Some(result) = can_declare_tsumo(
-            &drawn.0, 
-            &hand.0, 
-            &open_mentsu.0, 
-            tenpai,
-            is_closed, 
-            is_oya, 
-            kawa,
-            is_riichi, 
-            is_double, 
-            is_ippatsu,
-            &game.bakaze, 
-            &jikaze.0,
-            &*wall, 
-            &*dead_wall,
-            is_rinshan, 
-            game.calls_made,
+            &drawn.0, &hand.0, &open_mentsu.0, &nuked_tiles.0,
+            tenpai, is_closed, is_oya, kawa,
+            is_riichi, is_double, is_ippatsu,
+            &game.bakaze, &jikaze.0, &*wall, &*dead_wall,
+            is_rinshan, game.calls_made,
         ) {
             commands.entity(current_turn.0).insert(TsumoOption { result });
         }
-    
 }
 
 
@@ -798,7 +766,7 @@ pub fn declare_tsumo(
     mut points_query: Query<(Entity, &mut Points, Has<Oya>), With<Alive>>,
     alive_check: Query<(), With<Alive>>,
     loser_info_query: Query<(
-        Entity, &Hand, &OpenMentsu, Option<&Tenpai>, &Kawa, &Jikaze,
+        Entity, &Hand, &OpenMentsu, &NukedTiles, Option<&Tenpai>, &Kawa, &Jikaze, 
         Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>,
     ), With<Alive>>,
     visible_query: Query<(Entity, &Kawa, &OpenMentsu)>,
@@ -846,7 +814,7 @@ pub fn declare_tsumo(
 
         // build tilt info for each loser
         let mut losers = vec![];
-        for (entity, hand, open, tenpai, kawa, jikaze,
+        for (entity, hand, open, nuked_tiles, tenpai, kawa, jikaze,
              is_closed, is_oya_l, is_riichi, is_ippatsu, is_double) in loser_info_query.iter()
         {
             if entity == message.player { continue; }
@@ -869,7 +837,7 @@ pub fn declare_tsumo(
             }
 
             losers.push(build_loser_tilt_info(
-                entity, hand, open, tenpai, kawa, jikaze,
+                entity, hand, open, nuked_tiles, tenpai, kawa, jikaze, // PASSED nuked_tiles
                 is_closed, is_oya_l, is_riichi, is_double, is_ippatsu,
                 &game.bakaze, &*wall, &*dead_wall, game.calls_made, &visible_tiles,
             ));

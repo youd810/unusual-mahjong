@@ -58,13 +58,18 @@ pub fn get_dora_from_indicator(indicator: &Tile) -> Tile {
     }
 }
 
-pub fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool) -> DoraCount {
+pub fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool, nuked_tiles: &[Tile]) -> DoraCount {
     let mut dora_count = DoraCount {
         dora: 0,
         ura_dora: 0,
         additional_han: 0,
     };
-    for tile in combined_hand.iter() {
+
+    // standard tiles + nuked tiles
+    let mut all_eval_tiles = combined_hand.to_vec();
+    all_eval_tiles.extend_from_slice(nuked_tiles);
+
+    for tile in all_eval_tiles.iter() {
         for dora in dead_wall.dora_indicators.iter() {
             if *tile == get_dora_from_indicator(dora) {
                 dora_count.dora += 1;
@@ -80,6 +85,11 @@ pub fn count_dora(combined_hand: &[Tile], dead_wall: &DeadWall, is_riichi: bool)
             }
         }
     }
+
+    let nuked_pei = nuked_tiles.len() as u8;
+    dora_count.dora += nuked_pei;
+    dora_count.additional_han += nuked_pei;
+
     dora_count
 }
 
@@ -243,6 +253,7 @@ pub fn evaluate_yaku(
     wall: &Wall,
     dead_wall: &DeadWall,
     calls_made: bool,
+    nuked_tiles: &[Tile],
 ) -> HandResult {
     let mut best = HandResult {
         yaku_names: vec![],
@@ -292,7 +303,7 @@ pub fn evaluate_yaku(
     }
 
     if !best.yaku_names.is_empty() && !best.is_yakuman {
-        let dora_count = count_dora(combined_hand, dead_wall, is_riichi);
+        let dora_count = count_dora(combined_hand, dead_wall, is_riichi, nuked_tiles);
         best.dora_count = dora_count.dora;
         best.ura_dora_count = dora_count.ura_dora;
         best.total_han += dora_count.additional_han;

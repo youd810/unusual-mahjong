@@ -352,14 +352,14 @@ pub fn bot_discard_system(
 // also make this scale with bullet
 pub fn bot_call_system(
     query: Query<(
-        Entity, &BotProfile, &Hand, &OpenMentsu, &Jikaze,
+        Entity, &BotProfile, &Hand, &OpenMentsu, &NukedTiles, &Jikaze,
         Option<&RonOption>, Option<&PonOption>, Option<&ChiOption>, Option<&DaiminkanOption>,
     ), (
-        Without<HumanPlayer>,
-        Without<RonDeclared>,       // lock in decisions
-        Without<PonDeclared>,       
-        Without<ChiDeclared>,       
-        Without<DaiminkanDeclared>  
+        Without<HumanPlayer>, 
+        Without<RonDeclared>, // lock in decisions
+        Without<PonDeclared>, 
+        Without<ChiDeclared>, 
+        Without<DaiminkanDeclared>
     )>,
     game: Res<GameState>,
     wall: Res<Wall>,
@@ -367,7 +367,7 @@ pub fn bot_call_system(
     revolver: Res<Revolver>,
     mut commands: Commands,
 ) {
-    for (player, profile, hand, open_mentsu, jikaze, ron, pon, chi, kan) in query.iter() {
+    for (player, profile, hand, open_mentsu, nuked_tiles, jikaze, ron, pon, chi, kan) in query.iter() {
         if ron.is_none() && pon.is_none() && chi.is_none() && kan.is_none() { continue; }
 
         let death_risk = 1.0 / (7.0 - revolver.chamber as f32);
@@ -484,7 +484,7 @@ pub fn bot_call_system(
             let shanten = calculate_shanten_from_array(&mut freq);
             let ukeire = ukeire_tiles(&mut freq, shanten).len() as i32;
             let han = estimate_yaku_han(&combined, &jikaze.0, &game.bakaze) as i32;
-            let dora = count_dora(&combined, &*dead_wall, false).dora as i32;
+            let dora = count_dora(&combined, &*dead_wall, false, &nuked_tiles.0).dora as i32;
             (han, -shanten, ukeire, dora)
         };
 
@@ -609,28 +609,36 @@ pub fn bot_main_phase_system(
         Option<&AnkanOption>,
         Option<&ShouminkanOption>,
         Option<&KyuushuOption>,
+        Option<&NukidoraOption>,
+        Option<&NukedTiles>,
         Option<&Hand>,
         Option<&DrawnTile>,
         Option<&BotProfile>,
-        Option<&Jikaze>, 
+        Option<&Jikaze>,
     ), Without<HumanPlayer>>,
     visible_query: Query<(Entity, Has<Riichi>)>,
     revolver: Res<Revolver>,
-    game: Res<GameState>,     
+    game: Res<GameState>,
     dead_wall: Res<DeadWall>,
     mut tsumo_writer: MessageWriter<DeclareTsumoMessage>,
     mut kan_writer: MessageWriter<DeclareKanMessage>,
     mut kyuushu_writer: MessageWriter<DeclareKyuushuMessage>,
+    mut nuki_writer: MessageWriter<DeclareNukidoraMessage>,
     mut commands: Commands,
 ) {
     for (
-        player, tsumo, riichi, 
-        ankan, shouminkan, kyuushu, 
+        player, tsumo, riichi,
+        ankan, shouminkan, kyuushu, nuki, nuked_tiles_opt,
         hand_opt, drawn_opt, profile_opt, jikaze_opt
     ) in &query {
 
-        if tsumo.is_none() && riichi.is_none() && ankan.is_none() && shouminkan.is_none() && kyuushu.is_none() {
+        if tsumo.is_none() && riichi.is_none() && ankan.is_none() && shouminkan.is_none() && kyuushu.is_none() && nuki.is_none() {
             continue;
+        }
+
+        if let Some(n) = nuki {
+            nuki_writer.write(DeclareNukidoraMessage { player, tile: n.0[0] });
+            break;
         }
 
         if let Some(t) = tsumo {
@@ -641,7 +649,8 @@ pub fn bot_main_phase_system(
         if let Some(r) = riichi {
             let mut should_riichi = true;
 
-            if let (Some(hand), Some(drawn), Some(profile), Some(jikaze)) = (hand_opt, drawn_opt, profile_opt, jikaze_opt) {
+            if let (Some(hand), Some(drawn), Some(profile), Some(jikaze), Some(nuked_tiles)) 
+            = (hand_opt, drawn_opt, profile_opt, jikaze_opt, nuked_tiles_opt) {
                 let mut full_hand = hand.0.clone();
                 full_hand.push(drawn.0);
 
@@ -663,7 +672,7 @@ pub fn bot_main_phase_system(
 
                 // estimate current han value
                 let estimated_yaku_han = estimate_yaku_han(&full_hand, &jikaze.0, &game.bakaze);
-                let dora_count = count_dora(&full_hand, &dead_wall, false).dora;
+                let dora_count = count_dora(&full_hand, &dead_wall, false, &nuked_tiles.0).dora;
                 let total_estimated_han = estimated_yaku_han + dora_count;
 
                 if death_risk > effective_aggressiveness + 0.1 { // base addition
@@ -721,7 +730,7 @@ pub fn bot_cheat_decision_system(
 }
 
 pub fn bot_cheat_execution_system(
-    mut query: Query<(Entity, &mut Hand, &OpenMentsu, Option<&mut DrawnTile>, &BotCheatIntent, Has<Riichi>), Without<HumanPlayer>>,
+    mut query: Query<(Entity, &mut Hand, &OpenMentsu, &NukedTiles, Option<&mut DrawnTile>, &BotCheatIntent, Has<Riichi>), Without<HumanPlayer>>,
     mut kawa_query: Query<(Entity, &mut Kawa)>,
     open_query: Query<(Entity, &OpenMentsu)>,
     dead_wall: Res<DeadWall>,
@@ -732,7 +741,7 @@ pub fn bot_cheat_execution_system(
     let elapsed = timer.0.elapsed_secs();
     let mut rng = rand::rng();
 
-    for (bot_entity, mut hand, open_mentsu, mut maybe_drawn, intent, is_riichi) in query.iter_mut() {
+    for (bot_entity, mut hand, open_mentsu, nuked_tiles, mut maybe_drawn, intent, is_riichi) in query.iter_mut() {
         if elapsed < intent.execute_at { continue; }
 
         if hand.0.is_empty() {
@@ -766,7 +775,7 @@ pub fn bot_cheat_execution_system(
         let current_ukeire: i32 = ukeire_tiles(&mut current_freq, current_shanten).iter()
             .map(|&j| (4 - current_freq[j] as i32 - visible_tiles[j]).max(0))
             .sum();
-        let current_dora = count_dora(&combined_current, &*dead_wall, is_riichi).dora as i32;
+        let current_dora = count_dora(&combined_current, &*dead_wall, is_riichi, &nuked_tiles.0).dora as i32;
 
         let baseline_score = (current_shanten, -current_ukeire, -current_dora);
         let mut best_score = baseline_score;
@@ -788,7 +797,7 @@ pub fn bot_cheat_execution_system(
                     let ukeire: i32 = ukeire_tiles(&mut temp_freq, shanten).iter()
                         .map(|&j| (4 - temp_freq[j] as i32 - visible_tiles[j]).max(0))
                         .sum();
-                    let dora = count_dora(&combined_temp, &*dead_wall, is_riichi).dora as i32;
+                    let dora = count_dora(&combined_temp, &*dead_wall, is_riichi, &nuked_tiles.0).dora as i32;
 
                     let score = (shanten, -ukeire, -dora);
 

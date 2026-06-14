@@ -25,6 +25,12 @@ pub struct MatchEndPending;
 #[derive(Resource, Default)]
 pub struct SimulationMode;
 
+#[derive(Resource, Default)]
+pub struct ReplayLog {
+    pub events: Vec<String>,
+}
+
+
 #[derive(Resource)]
 pub struct CurrentTurn(pub Entity); // id of the current tsumo
 
