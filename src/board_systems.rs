@@ -529,17 +529,18 @@ pub fn declare_ron(
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
     mut ron_writer: MessageWriter<RonDealtMessage>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
 ) {
     // TODO: consider the possibility of ai not declaring a ron
     // TODO: OR add a human confirmation because humans are slow and would be too late to call ron on multiple ron against ais
 
     if !undecided.is_empty() { return; }
-    
+
     // automatically transitions to the next phase
     let mut winners: Vec<_> = declared.iter().collect();
-    if winners.is_empty() { 
-        return; 
+    if winners.is_empty() {
+        return;
     }
 
     lock.0 = true;
@@ -617,6 +618,15 @@ pub fn declare_ron(
 
         ron_winners.push((*winner, ron_option.result.to_owned(), score.total_won));
 
+        if let Some(ref mut log) = replay_log {
+            log.events.push(ReplayEvent::Ron {
+                winner: *winner,
+                from: ron_option.discarded_by,
+                result: ron_option.result.to_owned(),
+                payout: score.total_won,
+            });
+        }
+
         println!("{} declares Ron on {}! {:?} - {}han {}fu - {} points",
             winner, ron_option.discarded_by, ron_option.result.yaku_names,
             ron_option.result.total_han, ron_option.result.total_fu,
@@ -669,6 +679,7 @@ pub fn declare_ron(
 
     next_state.set(TurnState::RoundEnd);
 }
+
 
 
 pub fn clear_temp_furiten(
@@ -766,7 +777,7 @@ pub fn declare_tsumo(
     mut points_query: Query<(Entity, &mut Points, Has<Oya>), With<Alive>>,
     alive_check: Query<(), With<Alive>>,
     loser_info_query: Query<(
-        Entity, &Hand, &OpenMentsu, &NukedTiles, Option<&Tenpai>, &Kawa, &Jikaze, 
+        Entity, &Hand, &OpenMentsu, &NukedTiles, Option<&Tenpai>, &Kawa, &Jikaze,
         Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>,
     ), With<Alive>>,
     visible_query: Query<(Entity, &Kawa, &OpenMentsu)>,
@@ -775,9 +786,10 @@ pub fn declare_tsumo(
     mut game: ResMut<GameState>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut tsumo_writer: MessageWriter<TsumoDealtMessage>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
 ) {
-    // yeah these should be a simple if let check instead of a for loop 
+    // yeah these should be a simple if let check instead of a for loop
     // because this game is turn based and there can only be 1 message per turn (player turn not jun)
     if let Some(message) = messages.read().next() {
         let is_oya = oya_query.get(message.player).unwrap_or(false);
@@ -855,6 +867,14 @@ pub fn declare_tsumo(
             message.result.total_han, message.result.total_fu,
             score.total_won
         );
+
+        if let Some(ref mut log) = replay_log {
+            log.events.push(ReplayEvent::Tsumo {
+                player: message.player,
+                result: message.result.to_owned(),
+                payout: score.total_won,
+            });
+        }
 
         commands.insert_resource(RoundOutcome {
             winners: vec![(message.player, message.result.to_owned(), score.total_won)],
@@ -959,6 +979,7 @@ pub fn declare_kyuushu(
     mut messages: MessageReader<DeclareKyuushuMessage>,
     query: Query<(&Hand, &Kawa, &DrawnTile)>,
     game: Res<GameState>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>
 ) {
@@ -969,10 +990,17 @@ pub fn declare_kyuushu(
             combined.push(drawn.0.to_owned());
             if can_declare_kyuushu(&combined, game.calls_made, kawa) {
                 println!("{} declares Kyuushu Kyuuhai!", message.player);
+
+                if let Some(ref mut log) = replay_log {
+                    log.events.push(ReplayEvent::KyuushuKyuuhai {
+                        player: message.player,
+                    });
+                }
+
                 commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
                 commands.insert_resource(RoundOutcome {
-                    winners: vec![],  
-                    loser: None,             
+                    winners: vec![],
+                    loser: None,
                     is_tsumo: false,
                     tochuu_causer: vec![message.player],
                 });
@@ -982,11 +1010,13 @@ pub fn declare_kyuushu(
     }
 }
 
+
 // ! why does this take 3 players as the causer?
 pub fn suufon_renda(
     game: Res<GameState>,
     query: Query<&Kawa>,
     causer: Single<Entity, With<CurrentDiscard>>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>
 ) {
@@ -999,10 +1029,18 @@ pub fn suufon_renda(
                 && four_kawa.iter().all(|kawa| kawa.0[0] == first_tile)
             {
                 println!("Suufon Renda! All four players discarded {:?}", first_tile);
+
+                if let Some(ref mut log) = replay_log {
+                    log.events.push(ReplayEvent::TochuuRyuukyoku {
+                        reason: TochuuType::SuufonRenda,
+                        causers: vec![*causer],
+                    });
+                }
+
                 commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
                 commands.insert_resource(RoundOutcome {
-                    winners: vec![],  
-                    loser: None,             
+                    winners: vec![],
+                    loser: None,
                     is_tsumo: false,
                     tochuu_causer: vec![*causer],
                 });
@@ -1016,15 +1054,24 @@ pub fn suufon_renda(
 pub fn suucha_riichi(
     query: Query<&Riichi>,
     causer: Single<Entity, With<CurrentDiscard>>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>
 ) {
     if query.count() == 4 {
         println!("Suucha Riichi! All four players declared Riichi");
+
+        if let Some(ref mut log) = replay_log {
+            log.events.push(ReplayEvent::TochuuRyuukyoku {
+                reason: TochuuType::SuuchaRiichi,
+                causers: vec![*causer],
+            });
+        }
+
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
         commands.insert_resource(RoundOutcome {
-                    winners: vec![],  
-                    loser: None,             
+                    winners: vec![],
+                    loser: None,
                     is_tsumo: false,
                     tochuu_causer: vec![*causer],
                 });
@@ -1036,6 +1083,7 @@ pub fn suucha_riichi(
 pub fn suukaikan(
     query: Query<&OpenMentsu>,
     causer: Single<Entity, With<CurrentDiscard>>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
@@ -1043,10 +1091,18 @@ pub fn suukaikan(
 
     if total_kan >= 4 && players_with_kan > 1 {
         println!("Suukaikan! {} kan across {} players", total_kan, players_with_kan);
+
+        if let Some(ref mut log) = replay_log {
+            log.events.push(ReplayEvent::TochuuRyuukyoku {
+                reason: TochuuType::Suukaikan,
+                causers: vec![*causer],
+            });
+        }
+
         commands.insert_resource(RoundResult(RoundEndReason::TochuuRyuukyoku));
         commands.insert_resource(RoundOutcome {
-                    winners: vec![],  
-                    loser: None,             
+                    winners: vec![],
+                    loser: None,
                     is_tsumo: false,
                     tochuu_causer: vec![*causer],
                 });
@@ -1096,6 +1152,7 @@ pub fn declare_riichi(
     mut query: Query<(&mut Hand, &mut Points, &mut Kawa, Option<&DrawnTile>, &RiichiOption)>,
     mut game: ResMut<GameState>,
     mut next_state: ResMut<NextState<TurnState>>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
 ) {
     for message in messages.read() {
@@ -1144,6 +1201,14 @@ pub fn declare_riichi(
             println!("{} declares {}Riichi, discards {:?}",
                 message.player, if is_double { "Double " } else { "" }, message.tile);
 
+            if let Some(ref mut log) = replay_log {
+                log.events.push(ReplayEvent::RiichiDeclared {
+                    player: message.player,
+                    tile: message.tile,
+                    is_double,
+                });
+            }
+
             next_state.set(TurnState::CallWindow);
         }
     }
@@ -1180,6 +1245,7 @@ pub fn declare_pon(
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
 ) {
     if !undecided.is_empty() || !higher_priority.is_empty() {
@@ -1212,6 +1278,14 @@ pub fn declare_pon(
             commands.entity(discarded_by.0).insert(DiscardWasCalled);
             commands.entity(player).insert(ForbiddenDiscard(vec![tile]));
 
+            if let Some(ref mut log) = replay_log {
+                log.events.push(ReplayEvent::Pon {
+                    player,
+                    tile,
+                    from: discarded_by.0,
+                });
+            }
+
             game.calls_made = true;
             current_turn.0 = player;
             next_state.set(TurnState::MainPhase);
@@ -1220,8 +1294,6 @@ pub fn declare_pon(
         }
     }
 }
-
-
 
 
 pub fn chi_check(
@@ -1256,6 +1328,7 @@ pub fn declare_chi(
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
 ) {
     if !undecided.is_empty() || !higher_priority.is_empty() {
@@ -1347,6 +1420,15 @@ pub fn declare_chi(
 
             for ippatsu_player in ippatsu_query.iter() {
                 commands.entity(ippatsu_player).remove::<Ippatsu>();
+            }
+
+            if let Some(ref mut log) = replay_log {
+                log.events.push(ReplayEvent::Chi {
+                    player,
+                    tile: *tile,
+                    position: chi_declared.0,
+                    from: discarded_by.0,
+                });
             }
 
             current_turn.0 = player;
@@ -1453,6 +1535,7 @@ pub fn shouminkan_check(
 
 
 // ankan + shouminkan 
+// ankan + shouminkan
 pub fn declare_drawn_kan(
     mut messages: MessageReader<DeclareKanMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&DrawnTile>)>,
@@ -1462,6 +1545,7 @@ pub fn declare_drawn_kan(
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands
 ) {
     for message in messages.read() {
@@ -1516,6 +1600,16 @@ pub fn declare_drawn_kan(
                 Some(Kantsu::Ankan) => {
                     println!("{} declares Ankan on {:?}", message.player, tile);
 
+                    if let Some(ref mut log) = replay_log {
+                        log.events.push(ReplayEvent::Ankan {
+                            player: message.player,
+                            tile: *tile,
+                        });
+                        log.events.push(ReplayEvent::DoraRevealed {
+                            indicator: *dead_wall.dora_indicators.last().unwrap(),
+                        });
+                    }
+
                     game.calls_made = true;
                     for player in ippatsu_query.iter() {
                         commands.entity(player).remove::<Ippatsu>();
@@ -1525,6 +1619,13 @@ pub fn declare_drawn_kan(
                 },
                 Some(Kantsu::Shouminkan) => {
                     println!("{} declares Shouminkan on {:?}", message.player, tile);
+
+                    if let Some(ref mut log) = replay_log {
+                        log.events.push(ReplayEvent::Shouminkan {
+                            player: message.player,
+                            tile: *tile,
+                        });
+                    }
 
                     game.calls_made = true;
                     for player in ippatsu_query.iter() {
@@ -1542,6 +1643,7 @@ pub fn declare_drawn_kan(
 
 
 // daiminkan
+// daiminkan
 pub fn declare_discarded_kan(
     declared: Query<(Entity, &DaiminkanOption), With<DaiminkanDeclared>>,
     undecided: Query<(), (With<DaiminkanOption>, Without<DaiminkanDeclared>)>,
@@ -1553,6 +1655,7 @@ pub fn declare_discarded_kan(
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands
 ) {
     if !undecided.is_empty() || !higher_priority.is_empty() {
@@ -1581,6 +1684,14 @@ pub fn declare_discarded_kan(
                 game.calls_made = true;
 
                 println!("{} declares Daiminkan on {:?}", player, tile);
+
+                if let Some(ref mut log) = replay_log {
+                    log.events.push(ReplayEvent::Daiminkan {
+                        player,
+                        tile: *tile,
+                        from: discarded_by.0,
+                    });
+                }
 
                 for ippatsu_player in ippatsu_query.iter() {
                     commands.entity(ippatsu_player).remove::<Ippatsu>();
@@ -1637,6 +1748,7 @@ pub fn declare_nukidora(
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands
 ) {
     for message in messages.read() {
@@ -1672,6 +1784,14 @@ pub fn declare_nukidora(
             next_state.set(TurnState::RinshanDraw);
 
             println!("{} declares Nuki Pei!", message.player);
+
+            if let Some(ref mut log) = replay_log {
+                log.events.push(ReplayEvent::Nukidora {
+                    player: message.player,
+                    tile,
+                });
+            }
+
             break;
         }
     }
@@ -1692,19 +1812,29 @@ pub fn start_game(
     }
     wall.shuffle(&mut rand::rng());
 
-    let seats =[Wind::East, Wind::South, Wind::West, Wind::North];
+    let seats = [Wind::East, Wind::South, Wind::West, Wind::North];
     let mut starting_player = Entity::PLACEHOLDER;
 
+    let dora_indicators: Vec<Tile> = wall.drain(..1).collect();
+    let first_dora = dora_indicators[0];
+    let ura_indicators: Vec<Tile> = wall.drain(..1).collect();
+    let rinshan_tiles: Vec<Tile> = wall.drain(..4).collect();
+    let filler_tiles: Vec<Tile> = wall.drain(..8).collect();
+
     commands.insert_resource(DeadWall {
-        dora_indicators: wall.drain(..1).collect(),
-        ura_indicators: wall.drain(..1).collect(),
-        rinshan_tiles: wall.drain(..4).collect(),
-        filler_tiles: wall.drain(..8).collect(),
+        dora_indicators,
+        ura_indicators,
+        rinshan_tiles,
+        filler_tiles,
     });
+
+    let mut seat_info: Vec<(Entity, Wind, i32)> = vec![];
+    let mut hand_info: Vec<(Entity, Vec<Tile>)> = vec![];
 
     for (i, wind) in seats.iter().enumerate() {
         let mut starting_hand: Vec<Tile> = wall.drain(wall.len() - 13..).collect();
         starting_hand.sort();
+        let hand_snapshot = starting_hand.clone();
 
         let mut player = commands.spawn((
             PlayerTag,
@@ -1728,10 +1858,27 @@ pub fn start_game(
             player.insert(Oya);
             starting_player = player.id();
         }
+
+        let player_id = player.id();
+        seat_info.push((player_id, *wind, 25000));
+        hand_info.push((player_id, hand_snapshot));
     }
 
     commands.insert_resource(Revolver::new());
-    commands.insert_resource(ReplayLog::default());
+
+    let mut replay_log = ReplayLog::default();
+    replay_log.events.push(ReplayEvent::MatchStart {
+        phase: MatchPhase::Yonma,
+        seats: seat_info,
+    });
+    replay_log.events.push(ReplayEvent::RoundStart {
+        round: 1,
+        honba: 0,
+        bakaze: Wind::East,
+        dora_indicator: first_dora,
+        hands: hand_info,
+    });
+    commands.insert_resource(replay_log);
 
     commands.insert_resource(
         GameState {
@@ -1754,27 +1901,36 @@ pub fn start_game(
 }
 
 
+
 pub fn draw_tile(
     current_turn: Res<CurrentTurn>,
     mut wall: ResMut<Wall>,
     mut query: Query<(Entity, Has<Furiten>, Has<Riichi>)>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>, // used to change the game phase
+    mut replay_log: Option<ResMut<ReplayLog>>,
 ) {
     // this wouldn't cause a panic because the ryuukyoku check would end the game right there and then
-    let drawn = wall.0.remove(0); 
+    let drawn = wall.0.remove(0);
     commands.entity(current_turn.0).insert(DrawnTile(drawn));
 
-    if let Ok((player, _, is_riichi)) = query.get(current_turn.0) 
+    if let Ok((player, _, is_riichi)) = query.get(current_turn.0)
     && !is_riichi {
         commands.entity(player).remove::<Furiten>();
     }
-    
+
+    if let Some(ref mut log) = replay_log {
+        log.events.push(ReplayEvent::Draw {
+            player: current_turn.0,
+            tile: drawn,
+        });
+    }
 
     next_state.set(TurnState::MainPhase);
 
     println!("{} draws {:?}", current_turn.0, drawn);
 }
+
 
 
 pub fn rinshan_draw(
@@ -1784,6 +1940,7 @@ pub fn rinshan_draw(
     mut game: ResMut<GameState>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
 ) {
     game.pending_rinshan = false;
 
@@ -1796,6 +1953,13 @@ pub fn rinshan_draw(
     ));
 
     dead_wall.filler_tiles.push(wall.0.pop().unwrap());
+
+    if let Some(ref mut log) = replay_log {
+        log.events.push(ReplayEvent::RinshanDraw {
+            player: current_turn.0,
+            tile: drawn,
+        });
+    }
 
     next_state.set(TurnState::MainPhase);
 }
@@ -1810,7 +1974,8 @@ pub fn discard_tile(
     current_turn: Res<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut game: ResMut<GameState>,
-    mut dead_wall: ResMut<DeadWall>
+    mut dead_wall: ResMut<DeadWall>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
 ) {
     let mut processed = false;
     for message in messages.read() {
@@ -1818,7 +1983,7 @@ pub fn discard_tile(
 
         if let Ok((
             mut hand, maybe_drawn,
-            mut kawa, maybe_riichi, 
+            mut kawa, maybe_riichi,
             maybe_forbidden
         )) = query.get_mut(message.player) {
             let is_riichi = maybe_riichi.is_some();
@@ -1869,12 +2034,26 @@ pub fn discard_tile(
                 riichi.turns_since += 1;
             }
 
+            if let Some(ref mut log) = replay_log {
+                log.events.push(ReplayEvent::Discard {
+                    player: message.player,
+                    tile: final_discard,
+                    is_tsumogiri: message.is_tsumogiri || is_riichi,
+                });
+            }
+
             if game.pending_kan_dora {
                 let new_dora = dead_wall.filler_tiles.remove(0);
                 let new_ura =  dead_wall.filler_tiles.remove(0);
                 dead_wall.dora_indicators.push(new_dora);
                 dead_wall.ura_indicators.push(new_ura);
                 game.pending_kan_dora = false;
+
+                if let Some(ref mut log) = replay_log {
+                    log.events.push(ReplayEvent::DoraRevealed {
+                        indicator: new_dora,
+                    });
+                }
             }
 
             commands.entity(message.player)
@@ -1942,11 +2121,12 @@ pub fn auto_advance_call_window(
 
 
 pub fn start_round(
-    mut query: Query<(&mut Hand, &mut NukedTiles), With<Alive>>,
+    mut query: Query<(Entity, &mut Hand, &mut NukedTiles), With<Alive>>,
     alive_check: Query<(), With<Alive>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
-    game: Res<GameState>
+    game: Res<GameState>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
 ) {
     if alive_check.iter().count() <= 1 {
         println!("ゲーム終了");
@@ -1961,33 +2141,55 @@ pub fn start_round(
     }
     wall.shuffle(&mut rand::rng());
 
-    // Dynamic split based on match phase
+    // dynamic split based on match phase
     let (rinshan_count, filler_count) = match game.match_phase {
         MatchPhase::Yonma => (4, 8),
         MatchPhase::Sanma | MatchPhase::Nima => (8, 4),
     };
 
+    let dora_indicators: Vec<Tile> = wall.drain(..1).collect();
+    let first_dora = dora_indicators[0];
+    let ura_indicators: Vec<Tile> = wall.drain(..1).collect();
+    let rinshan_tiles: Vec<Tile> = wall.drain(..rinshan_count).collect();
+    let filler_tiles: Vec<Tile> = wall.drain(..filler_count).collect();
+
     commands.insert_resource(DeadWall {
-        dora_indicators: wall.drain(..1).collect(),
-        ura_indicators: wall.drain(..1).collect(),
-        rinshan_tiles: wall.drain(..rinshan_count).collect(),
-        filler_tiles: wall.drain(..filler_count).collect(),
+        dora_indicators,
+        ura_indicators,
+        rinshan_tiles,
+        filler_tiles,
     });
 
-    for (mut hand, mut nuked_tiles) in &mut query {
+    let mut hand_info: Vec<(Entity, Vec<Tile>)> = vec![];
+
+    for (entity, mut hand, mut nuked_tiles) in &mut query {
         let starting_hand: Vec<Tile> = wall.drain(wall.len() - 13..).collect();
         hand.0 = starting_hand;
         hand.0.sort();
         nuked_tiles.0.clear();
+        hand_info.push((entity, hand.0.clone()));
+    }
+
+    if let Some(ref mut log) = replay_log {
+        log.events.push(ReplayEvent::RoundStart {
+            round: game.rounds,
+            honba: game.honba,
+            bakaze: game.bakaze,
+            dora_indicator: first_dora,
+            hands: hand_info,
+        });
     }
 
     commands.insert_resource(Wall(wall));
     next_state.set(TurnState::Draw);
 }
 
+
 pub fn build_round_summary(
     result: Res<RoundResult>,
     outcome: Option<Res<RoundOutcome>>,
+    tenpai_query: Query<Entity, (With<Tenpai>, With<Alive>)>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
 ) {
     let reason_text = match &result.0 {
@@ -1997,6 +2199,45 @@ pub fn build_round_summary(
         RoundEndReason::RyuukyokuOyaNoten => "Ryuukyoku (Oya Noten)".to_owned(),
         RoundEndReason::TochuuRyuukyoku => "Tochuu Ryuukyoku".to_owned(),
     };
+
+    if let Some(ref mut log) = replay_log {
+        match &result.0 {
+            // tochuu logged by individual tochuu systems
+            RoundEndReason::TochuuRyuukyoku => {},
+            RoundEndReason::RyuukyokuOyaTenpai | RoundEndReason::RyuukyokuOyaNoten => {
+                if let Some(ref outcome) = outcome {
+                    // nagashi mangan during ryuukyoku
+                    let is_nagashi = outcome.winners.iter().any(|(_, hand_result, _)|
+                        hand_result.yaku_names.contains(&"Nagashi Mangan".to_string()));
+
+                    if is_nagashi {
+                        for (winner, _, payout) in &outcome.winners {
+                            log.events.push(ReplayEvent::NagashiMangan {
+                                player: *winner,
+                                payout: *payout,
+                            });
+                        }
+                    } else {
+                        let tenpai_players: Vec<Entity> = tenpai_query.iter().collect();
+                        log.events.push(ReplayEvent::Ryuukyoku { tenpai_players });
+                    }
+                } else {
+                    let tenpai_players: Vec<Entity> = tenpai_query.iter().collect();
+                    log.events.push(ReplayEvent::Ryuukyoku { tenpai_players });
+                }
+            },
+            RoundEndReason::OyaWin | RoundEndReason::NonOyaWin => {
+                if let Some(ref outcome) = outcome {
+                    log.events.push(ReplayEvent::RoundEnd {
+                        reason: result.0.clone(),
+                        winners: outcome.winners.clone(),
+                        loser: outcome.loser,
+                        is_tsumo: outcome.is_tsumo,
+                    });
+                }
+            },
+        }
+    }
 
     if let Some(outcome) = outcome {
         commands.insert_resource(RoundSummary {
@@ -2147,6 +2388,7 @@ pub fn match_transition(
     mut alive_query: Query<(Entity, &mut Points, &mut Jikaze, Has<HumanPlayer>), With<Alive>>,
     tile_query: Query<Entity, With<DiscardedTile>>,
     mut revolver: ResMut<Revolver>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
@@ -2163,10 +2405,12 @@ pub fn match_transition(
     alive.sort_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(&b.2)));
 
     let mut human_eliminated = false;
+    let mut eliminated_player: Option<Entity> = None;
 
     // natural end: eliminate lowest scorer
     if alive.len() == expected_players {
         let (loser, _, _, is_human) = alive.pop().unwrap();
+        eliminated_player = Some(loser);
 
         commands.entity(loser).remove::<Alive>();
         commands.entity(loser).remove::<Hand>();
@@ -2205,6 +2449,8 @@ pub fn match_transition(
         MatchPhase::Yonma => unreachable!(),
     };
 
+    let mut new_standings: Vec<(Entity, Wind, i32)> = vec![];
+
     for (i, (entity, _, _, _)) in alive.iter().enumerate() {
         let new_points = pool * cuts[i] / 100;
         if let Ok((_, mut points, mut jikaze, _)) = alive_query.get_mut(*entity) {
@@ -2217,6 +2463,16 @@ pub fn match_transition(
         } else {
             commands.entity(*entity).remove::<Oya>();
         }
+
+        new_standings.push((*entity, seats[i], new_points));
+    }
+
+    if let Some(ref mut log) = replay_log {
+        log.events.push(ReplayEvent::MatchTransition {
+            new_phase,
+            eliminated: eliminated_player.expect("The player did not get eliminated"),
+            new_standings,
+        });
     }
 
     // reset game state
@@ -2251,6 +2507,7 @@ pub fn match_transition(
         next_state.set(TurnState::StartNewRound);
     }
 }
+
 
 
 pub fn game_cleanup(
@@ -2293,24 +2550,15 @@ pub fn toggle_vsync(
     }
 }
 
-pub fn log_event_system(
-    mut discard_events: MessageReader<DiscardTileMessage>,
-    mut pon_events: MessageReader<DeclarePonMessage>,
-    state: Res<State<TurnState>>,
+pub fn log_game_over(
+    query: Query<(Entity, &Points), With<PlayerTag>>,
     mut replay_log: Option<ResMut<ReplayLog>>,
 ) {
-    // only log if not in human dead menu fast forward
-    if *state.get() == TurnState::HumanDeadMenu { return; }
-
     let Some(mut replay_log) = replay_log else { return };
-
-    for ev in discard_events.read() {
-        replay_log.events.push(format!("Discard: Player {:?} discarded {:?}", ev.player, ev.tile));
-    }
-    for ev in pon_events.read() {
-        replay_log.events.push(format!("Call: Player {:?} called Pon on {:?}", ev.player, ev.tile));
-    }
-    // TODO: add more
+    let mut standings: Vec<(Entity, i32)> = query.iter()
+        .map(|(entity, points)| (entity, points.0))
+        .collect();
+    standings.sort_by(|left, right| right.1.cmp(&left.1));
+    replay_log.events.push(ReplayEvent::GameOver { standings });
 }
-
 

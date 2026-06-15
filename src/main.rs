@@ -39,7 +39,7 @@ fn main() {
         .init_resource::<Omniscience>()
         // replay related
         .add_systems(Update, toggle_vsync)
-        .add_systems(Update, log_event_system)
+        .add_systems(OnEnter(TurnState::GameOver), log_game_over)
         // messages
         .add_message::<DiscardTileMessage>()
         .add_message::<DeclarePonMessage>()

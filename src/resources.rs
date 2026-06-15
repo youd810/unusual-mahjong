@@ -25,11 +25,6 @@ pub struct MatchEndPending;
 #[derive(Resource, Default)]
 pub struct SimulationMode;
 
-#[derive(Resource, Default)]
-pub struct ReplayLog {
-    pub events: Vec<String>,
-}
-
 
 #[derive(Resource)]
 pub struct CurrentTurn(pub Entity); // id of the current tsumo
@@ -47,6 +42,7 @@ pub struct DeadWall {
 }
 
 
+#[derive(Debug, Clone)]
 pub enum RoundEndReason {
     OyaWin,             // renchan
     NonOyaWin,
@@ -162,3 +158,158 @@ pub struct BlackoutTileSelection {
 
 #[derive(Resource, Default)]
 pub struct Omniscience(pub bool);
+
+
+#[derive(Debug, Clone)]
+pub enum TochuuType {
+    SuufonRenda,
+    SuuchaRiichi,
+    Suukaikan,
+    Sanchahou,
+}
+
+
+
+#[derive(Debug, Clone)]
+pub enum ReplayEvent {
+    // match lifecycle
+    MatchStart {
+        phase: MatchPhase,
+        seats: Vec<(Entity, Wind, i32)>,
+    },
+    RoundStart {
+        round: u8,
+        honba: u8,
+        bakaze: Wind,
+        dora_indicator: Tile,
+        hands: Vec<(Entity, Vec<Tile>)>,
+    },
+    RoundEnd {
+        reason: RoundEndReason,
+        winners: Vec<(Entity, HandResult, u32)>,
+        loser: Option<Entity>,
+        is_tsumo: bool,
+    },
+    MatchTransition {
+        new_phase: MatchPhase,
+        eliminated: Entity,
+        new_standings: Vec<(Entity, Wind, i32)>,
+    },
+    GameOver {
+        standings: Vec<(Entity, i32)>,
+    },
+
+    // core turn actions
+    Draw {
+        player: Entity,
+        tile: Tile,
+    },
+    RinshanDraw {
+        player: Entity,
+        tile: Tile,
+    },
+    Discard {
+        player: Entity,
+        tile: Tile,
+        is_tsumogiri: bool,
+    },
+
+    // calls on opponent discards
+    Ron {
+        winner: Entity,
+        from: Entity,
+        result: HandResult,
+        payout: u32,
+    },
+    Pon {
+        player: Entity,
+        tile: Tile,
+        from: Entity,
+    },
+    Chi {
+        player: Entity,
+        tile: Tile,
+        position: ChiTilePos,
+        from: Entity,
+    },
+    Daiminkan {
+        player: Entity,
+        tile: Tile,
+        from: Entity,
+    },
+
+    // self-turn declarations
+    Tsumo {
+        player: Entity,
+        result: HandResult,
+        payout: u32,
+    },
+    Ankan {
+        player: Entity,
+        tile: Tile,
+    },
+    Shouminkan {
+        player: Entity,
+        tile: Tile,
+    },
+    RiichiDeclared {
+        player: Entity,
+        tile: Tile,
+        is_double: bool,
+    },
+    Nukidora {
+        player: Entity,
+        tile: Tile,
+    },
+    KyuushuKyuuhai {
+        player: Entity,
+    },
+
+    NagashiMangan {
+        player: Entity,
+        payout: u32,
+    },
+
+    // dora
+    DoraRevealed {
+        indicator: Tile,
+    },
+
+    // round-ending draws
+    Ryuukyoku {
+        tenpai_players: Vec<Entity>,
+    },
+    TochuuRyuukyoku {
+        reason: TochuuType,
+        causers: Vec<Entity>,
+    },
+
+    // blackout and cheating
+    BlackoutStart {
+        duration_secs: f32,
+    },
+    BlackoutEnd,
+    Cheat {
+        cheater: Entity,
+        target_kawa: Entity,
+        tile_taken: Tile,
+        tile_left: Tile,
+    },
+    Accusation {
+        accuser: Entity,
+        suspect: Entity,
+        was_correct: bool,
+    },
+
+    // shooting
+    ShotFired {
+        shooter: Entity,
+        target: Entity,
+        lethal: bool,
+    },
+}
+
+#[derive(Resource, Default)]
+pub struct ReplayLog {
+    pub events: Vec<ReplayEvent>,
+}
