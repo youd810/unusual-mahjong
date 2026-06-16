@@ -459,6 +459,7 @@ pub fn blackout_ui_system(
     mut kawa_query: Query<(Entity, &mut Kawa, &Jikaze)>,
     mut selection: ResMut<BlackoutTileSelection>,
     mut cheat_log: ResMut<CheatLog>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     timer: Res<BlackoutTimer>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
@@ -537,6 +538,15 @@ pub fn blackout_ui_system(
                                 tile_taken: taken,
                                 tile_left: hand_tile,
                             });
+
+                            if let Some(ref mut log) = replay_log {
+                                log.events.push(ReplayEvent::Cheat {
+                                    cheater: player,
+                                    target_kawa: kawa_owner,
+                                    tile_taken: taken,
+                                    tile_left: hand_tile,
+                                });
+                            }
 
                             selection.selected = SelectedSource::None;
 

@@ -741,6 +741,7 @@ pub fn bot_cheat_execution_system(
     dead_wall: Res<DeadWall>,
     timer: Res<BlackoutTimer>,
     mut cheat_log: ResMut<CheatLog>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
 ) {
     let elapsed = timer.0.elapsed_secs();
@@ -838,6 +839,15 @@ pub fn bot_cheat_execution_system(
                     tile_taken: stolen_tile,
                     tile_left: bot_tile,
                 });
+
+                if let Some(ref mut log) = replay_log {
+                    log.events.push(ReplayEvent::Cheat {
+                        cheater: bot_entity,
+                        target_kawa: target_entity,
+                        tile_taken: stolen_tile,
+                        tile_left: bot_tile,
+                    });
+                }
 
                 println!("Cheat: Bot {:?} grabbed {:?} (gave {:?}) from {:?}",
                     bot_entity, stolen_tile, bot_tile, target_entity);

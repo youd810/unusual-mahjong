@@ -19,6 +19,7 @@ pub fn blackout_check_system(
     query: Query<(Entity, &Kawa)>,
     sim: Option<Res<SimulationMode>>,
     mut next_state: ResMut<NextState<TurnState>>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
 ) {
     if sim.is_some() {
@@ -38,16 +39,25 @@ pub fn blackout_check_system(
         .map(|(e, kawa)| (e, kawa.0.clone()))
         .collect();
 
+    let duration = rand::rng().random_range(1.0..=5.0);
+
     commands.insert_resource(KawaSnapshot { all_kawa });
     commands.insert_resource(PreBlackoutState(state.get().clone()));
     commands.insert_resource(CheatLog::default());
     commands.insert_resource(BlackoutTimer(Timer::from_seconds(
-        rand::rng().random_range(1.0..=5.0),
+        duration,
         TimerMode::Once,
     )));
 
+    if let Some(ref mut log) = replay_log {
+        log.events.push(ReplayEvent::BlackoutStart {
+            duration_secs: duration,
+        });
+    }
+
     next_state.set(TurnState::Blackout);
 }
+
 
 pub fn blackout_timer_system(
     time: Res<Time>,
@@ -68,9 +78,14 @@ pub fn blackout_timer_system(
 pub fn cleanup_blackout(
     mut commands: Commands,
     mut selection: ResMut<BlackoutTileSelection>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
 ) {
     commands.remove_resource::<BlackoutTimer>();
     selection.selected = SelectedSource::None;
+
+    if let Some(ref mut log) = replay_log {
+        log.events.push(ReplayEvent::BlackoutEnd);
+    }
 }
 
 
@@ -98,12 +113,21 @@ pub fn resolve_accusation(
     mut next_state: ResMut<NextState<TurnState>>,
     mut eliminated_writer: MessageWriter<PlayerEliminatedMessage>,
     mut survived_writer: MessageWriter<SurvivedShotMessage>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
 ) {
     let Some(message) = messages.read().next() else { return };
 
     let suspect_cheated = cheat_log.0.iter()
         .any(|entry| entry.cheater == message.suspect);
+
+    if let Some(ref mut log) = replay_log {
+        log.events.push(ReplayEvent::Accusation {
+            accuser: message.accuser,
+            suspect: message.suspect,
+            was_correct: suspect_cheated,
+        });
+    }
 
     let (shooter, target) = if suspect_cheated {
         println!("{} correctly accused {}!", message.accuser, message.suspect);
@@ -240,6 +264,7 @@ pub fn process_shot_queue(
     human_query: Query<Has<HumanPlayer>>,
     mut eliminated_writer: MessageWriter<PlayerEliminatedMessage>,
     mut survived_writer: MessageWriter<SurvivedShotMessage>,
+    mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
@@ -250,7 +275,17 @@ pub fn process_shot_queue(
         println!("{} shoots at {} (chamber {}/{})",
             shot.shooter, shot.target, revolver.chamber, revolver.bullet);
 
-        if revolver.pull() {
+        let is_lethal = revolver.pull();
+
+        if let Some(ref mut log) = replay_log {
+            log.events.push(ReplayEvent::ShotFired {
+                shooter: shot.shooter,
+                target: shot.target,
+                lethal: is_lethal,
+            });
+        }
+
+        if is_lethal {
             println!("BANG! {} is eliminated!{}", shot.target,
                 if is_human { " (HUMAN)" } else { "" });
 
