@@ -1,8 +1,11 @@
 use bevy::prelude::*;
+use serde::{Serialize, Deserialize};
 use crate::core::*;
 use crate::states::*;
 use crate::scoring::*;
+
 use rand::RngExt;
+use std::collections::HashMap;
 
 
 #[derive(Resource)]
@@ -42,9 +45,9 @@ pub struct DeadWall {
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RoundEndReason {
-    OyaWin,             // renchan
+    OyaWin, // renchan
     NonOyaWin,
     RyuukyokuOyaTenpai, // renchan
     RyuukyokuOyaNoten,
@@ -160,7 +163,7 @@ pub struct BlackoutTileSelection {
 pub struct Omniscience(pub bool);
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)] 
 pub enum TochuuType {
     SuufonRenda,
     SuuchaRiichi,
@@ -168,148 +171,260 @@ pub enum TochuuType {
     Sanchahou,
 }
 
-
-
-#[derive(Debug, Clone)]
-pub enum ReplayEvent {
-    // match lifecycle
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ReplayEvent<P> {
     MatchStart {
         phase: MatchPhase,
-        seats: Vec<(Entity, Wind, i32)>,
+        seats: Vec<(P, Wind, i32)>,
     },
     RoundStart {
         round: u8,
         honba: u8,
         bakaze: Wind,
         dora_indicator: Tile,
-        hands: Vec<(Entity, Vec<Tile>)>,
+        hands: Vec<(P, Vec<Tile>)>,
     },
     RoundEnd {
         reason: RoundEndReason,
-        winners: Vec<(Entity, HandResult, u32)>,
-        loser: Option<Entity>,
+        winners: Vec<(P, HandResult, u32)>,
+        loser: Option<P>,
         is_tsumo: bool,
     },
     MatchTransition {
         new_phase: MatchPhase,
-        eliminated: Entity,
-        new_standings: Vec<(Entity, Wind, i32)>,
+        eliminated: P,
+        new_standings: Vec<(P, Wind, i32)>,
     },
     GameOver {
-        standings: Vec<(Entity, i32)>,
+        standings: Vec<(P, i32)>,
     },
-
-    // core turn actions
     Draw {
-        player: Entity,
+        player: P,
         tile: Tile,
     },
     RinshanDraw {
-        player: Entity,
+        player: P,
         tile: Tile,
     },
     Discard {
-        player: Entity,
+        player: P,
         tile: Tile,
         is_tsumogiri: bool,
     },
-
-    // calls on opponent discards
     Ron {
-        winner: Entity,
-        from: Entity,
+        winner: P,
+        from: P,
         result: HandResult,
         payout: u32,
     },
     Pon {
-        player: Entity,
+        player: P,
         tile: Tile,
-        from: Entity,
+        from: P,
     },
     Chi {
-        player: Entity,
+        player: P,
         tile: Tile,
         position: ChiTilePos,
-        from: Entity,
+        from: P,
     },
     Daiminkan {
-        player: Entity,
+        player: P,
         tile: Tile,
-        from: Entity,
+        from: P,
     },
-
-    // self-turn declarations
     Tsumo {
-        player: Entity,
+        player: P,
         result: HandResult,
         payout: u32,
     },
     Ankan {
-        player: Entity,
+        player: P,
         tile: Tile,
     },
     Shouminkan {
-        player: Entity,
+        player: P,
         tile: Tile,
     },
     RiichiDeclared {
-        player: Entity,
+        player: P,
         tile: Tile,
         is_double: bool,
     },
     Nukidora {
-        player: Entity,
+        player: P,
         tile: Tile,
     },
     KyuushuKyuuhai {
-        player: Entity,
+        player: P,
     },
-
     NagashiMangan {
-        player: Entity,
+        player: P,
         payout: u32,
     },
-
-    // dora
     DoraRevealed {
         indicator: Tile,
     },
-
-    // round-ending draws
     Ryuukyoku {
-        tenpai_players: Vec<Entity>,
+        tenpai_players: Vec<P>,
     },
     TochuuRyuukyoku {
         reason: TochuuType,
-        causers: Vec<Entity>,
+        causers: Vec<P>,
     },
-
-    // blackout and cheating
     BlackoutStart {
         duration_secs: f32,
     },
     BlackoutEnd,
     Cheat {
-        cheater: Entity,
-        target_kawa: Entity,
+        cheater: P,
+        target_kawa: P,
         tile_taken: Tile,
         tile_left: Tile,
     },
     Accusation {
-        accuser: Entity,
-        suspect: Entity,
+        accuser: P,
+        suspect: P,
         was_correct: bool,
     },
-
-    // shooting
     ShotFired {
-        shooter: Entity,
-        target: Entity,
+        shooter: P,
+        target: P,
         lethal: bool,
     },
 }
 
+impl ReplayEvent<Entity> {
+    pub fn to_export(&self, map: &HashMap<Entity, u8>) -> ReplayEvent<u8> {
+        // fallback to 255 if an entity somehow slipped past mapping (should never happen)
+        let get = |e: &Entity| *map.get(e).unwrap_or(&255);
+
+        match self {
+            ReplayEvent::MatchStart { phase, seats } => ReplayEvent::MatchStart {
+                phase: *phase,
+                seats: seats.iter().map(|(e, w, p)| (get(e), *w, *p)).collect(),
+            },
+            ReplayEvent::RoundStart { round, honba, bakaze, dora_indicator, hands } => ReplayEvent::RoundStart {
+                round: *round,
+                honba: *honba,
+                bakaze: *bakaze,
+                dora_indicator: *dora_indicator,
+                hands: hands.iter().map(|(e, t)| (get(e), t.clone())).collect(),
+            },
+            ReplayEvent::RoundEnd { reason, winners, loser, is_tsumo } => ReplayEvent::RoundEnd {
+                reason: reason.clone(),
+                winners: winners.iter().map(|(e, r, p)| (get(e), r.clone(), *p)).collect(),
+                loser: loser.as_ref().map(get),
+                is_tsumo: *is_tsumo,
+            },
+            ReplayEvent::MatchTransition { new_phase, eliminated, new_standings } => ReplayEvent::MatchTransition {
+                new_phase: *new_phase,
+                eliminated: get(eliminated),
+                new_standings: new_standings.iter().map(|(e, w, p)| (get(e), *w, *p)).collect(),
+            },
+            ReplayEvent::GameOver { standings } => ReplayEvent::GameOver {
+                standings: standings.iter().map(|(e, p)| (get(e), *p)).collect(),
+            },
+            ReplayEvent::Draw { player, tile } => ReplayEvent::Draw { 
+                player: get(player), 
+                tile: *tile 
+            },
+            ReplayEvent::RinshanDraw { player, tile } => ReplayEvent::RinshanDraw { 
+                player: get(player), 
+                tile: *tile 
+            },
+            ReplayEvent::Discard { player, tile, is_tsumogiri } => ReplayEvent::Discard { 
+                player: get(player), 
+                tile: *tile, 
+                is_tsumogiri: *is_tsumogiri 
+            },
+            ReplayEvent::Ron { winner, from, result, payout } => ReplayEvent::Ron { 
+                winner: get(winner), 
+                from: get(from), 
+                result: result.clone(), 
+                payout: *payout 
+            },
+            ReplayEvent::Pon { player, tile, from } => ReplayEvent::Pon { 
+                player: get(player), 
+                tile: *tile, 
+                from: get(from) 
+            },
+            ReplayEvent::Chi { player, tile, position, from } => ReplayEvent::Chi { 
+                player: get(player), 
+                tile: *tile, 
+                position: *position, 
+                from: get(from) 
+            },
+            ReplayEvent::Daiminkan { player, tile, from } => ReplayEvent::Daiminkan { 
+                player: get(player), 
+                tile: *tile, 
+                from: get(from) 
+            },
+            ReplayEvent::Tsumo { player, result, payout } => ReplayEvent::Tsumo { 
+                player: get(player), 
+                result: result.clone(), 
+                payout: *payout 
+            },
+            ReplayEvent::Ankan { player, tile } => ReplayEvent::Ankan { 
+                player: get(player), 
+                tile: *tile 
+            },
+            ReplayEvent::Shouminkan { player, tile } => ReplayEvent::Shouminkan { 
+                player: get(player), 
+                tile: *tile 
+            },
+            ReplayEvent::RiichiDeclared { player, tile, is_double } => ReplayEvent::RiichiDeclared { 
+                player: get(player), 
+                tile: *tile, 
+                is_double: *is_double 
+            },
+            ReplayEvent::Nukidora { player, tile } => ReplayEvent::Nukidora { 
+                player: get(player), 
+                tile: *tile 
+            },
+            ReplayEvent::KyuushuKyuuhai { player } => ReplayEvent::KyuushuKyuuhai { player: get(player) },
+            ReplayEvent::NagashiMangan { player, payout } => ReplayEvent::NagashiMangan { 
+                player: get(player), 
+                payout: *payout 
+            },
+            ReplayEvent::DoraRevealed { indicator } => ReplayEvent::DoraRevealed { indicator: *indicator },
+            ReplayEvent::Ryuukyoku { tenpai_players } => ReplayEvent::Ryuukyoku { 
+                tenpai_players: tenpai_players.iter().map(get).collect() 
+            },
+            ReplayEvent::TochuuRyuukyoku { reason, causers } => ReplayEvent::TochuuRyuukyoku { 
+                reason: reason.clone(), 
+                causers: causers.iter().map(get).collect() 
+            },
+            ReplayEvent::BlackoutStart { duration_secs } => ReplayEvent::BlackoutStart { duration_secs: *duration_secs },
+            ReplayEvent::BlackoutEnd => ReplayEvent::BlackoutEnd,
+            ReplayEvent::Cheat { cheater, target_kawa, tile_taken, tile_left } => ReplayEvent::Cheat {
+                cheater: get(cheater),
+                target_kawa: get(target_kawa),
+                tile_taken: *tile_taken,
+                tile_left: *tile_left,
+            },
+            ReplayEvent::Accusation { accuser, suspect, was_correct } => ReplayEvent::Accusation {
+                accuser: get(accuser),
+                suspect: get(suspect),
+                was_correct: *was_correct,
+            },
+            ReplayEvent::ShotFired { shooter, target, lethal } => ReplayEvent::ShotFired {
+                shooter: get(shooter),
+                target: get(target),
+                lethal: *lethal,
+            },
+        }
+    }
+}
+
+// for game
 #[derive(Resource, Default)]
 pub struct ReplayLog {
-    pub events: Vec<ReplayEvent>,
+    pub events: Vec<ReplayEvent<Entity>>,
+}
+
+// for serialization
+#[derive(Serialize, Deserialize)]
+pub struct ExportableReplayLog {
+    pub events: Vec<ReplayEvent<u8>>,
 }

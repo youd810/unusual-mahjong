@@ -11,6 +11,9 @@ use bevy::prelude::*;
 use bevy::window::{PresentMode, PrimaryWindow};
 use rand::{RngExt, seq::SliceRandom};
 
+use std::collections::HashMap;
+use std::fs;
+
 
 pub fn blackout_check_system(
     time: Res<Time>,
@@ -2595,5 +2598,41 @@ pub fn log_game_over(
         .collect();
     standings.sort_by(|left, right| right.1.cmp(&left.1));
     replay_log.events.push(ReplayEvent::GameOver { standings });
+
+    // build the mapping from the starting seats
+    let mut entity_map: HashMap<Entity, u8> = HashMap::new();
+    if let Some(ReplayEvent::MatchStart { seats, .. }) = replay_log.events.first() {
+        // Map based on seat index (0=East, 1=South, 2=West, 3=North)
+        for (i, (entity, _, _)) in seats.iter().enumerate() {
+            entity_map.insert(*entity, i as u8);
+        }
+    } else {
+        eprintln!("Failed to find MatchStart event. Replay export mapping aborted.");
+        return;
+    }
+
+    // translate the internal log into the exportable format
+    let export_log = ExportableReplayLog {
+        events: replay_log.events.iter()
+            .map(|event| event.to_export(&entity_map))
+            .collect(),
+    };
+
+    // serialize and save to TOML
+    if let Ok(toml_string) = toml::to_string_pretty(&export_log) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let filename = format!("replay_{}.toml", timestamp);
+
+        if let Err(e) = fs::write(&filename, toml_string) {
+            eprintln!("Failed to write replay file: {}", e);
+        } else {
+            println!("Replay saved successfully to {}", filename);
+        }
+    } else {
+        eprintln!("Failed to serialize replay log to TOML.");
+    }
 }
 
