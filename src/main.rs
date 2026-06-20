@@ -13,6 +13,7 @@ mod bot_systems;
 mod states;
 mod yaku;
 mod ui;
+mod visuals;
 
 use bevy::prelude::*;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
@@ -30,6 +31,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(EguiPlugin::default())
+        .add_plugins(visuals::VisualsPlugin)
         .init_resource::<CallLock>()
         .init_state::<TurnState>()
         .add_systems(EguiPrimaryContextPass, (info_display_ui_system).run_if(resource_exists::<Wall>))
@@ -55,7 +57,7 @@ fn main() {
         .add_message::<PlayerEliminatedMessage>()
         .add_message::<SurvivedShotMessage>()
         // camera
-        .add_systems(Startup, spawn_camera)
+        //.add_systems(Startup, spawn_camera)
         // setup (first round)
         .add_systems(OnEnter(TurnState::Setup), (
             game_cleanup,
