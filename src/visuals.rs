@@ -1,5 +1,3 @@
-// ! discards aren't rendering on round 2 onwards
-
 use bevy::prelude::*;
 use bevy::gltf::{Gltf, GltfNode, GltfMesh};
 use std::collections::{HashMap, HashSet};
@@ -16,7 +14,6 @@ pub struct TilePart {
 
 #[derive(Resource, Default)]
 pub struct TileModels {
-    // maps the asset name (e.g., "pin1") to its collected visual mesh parts
     pub models: HashMap<String, Vec<TilePart>>,
 }
 
@@ -31,7 +28,14 @@ pub struct VisualHandTile {
 }
 
 #[derive(Component)]
-pub struct VisualDiscardAttached;
+pub struct VisualKawaTile {
+    pub owner: Entity,
+}
+
+#[derive(Component)]
+pub struct VisualMentsuTile {
+    pub owner: Entity,
+}
 
 pub struct VisualsPlugin;
 
@@ -42,19 +46,18 @@ impl Plugin for VisualsPlugin {
             .add_systems(Update, (
                 check_gltf_loaded,
                 render_hands_system.run_if(resource_exists::<TileModels>),
-                render_discards_system.run_if(resource_exists::<TileModels>),
+                render_kawa_system.run_if(resource_exists::<TileModels>),
+                render_open_mentsu_system.run_if(resource_exists::<TileModels>),
+                cleanup_orphaned_visuals_system,
             ));
     }
 }
 
 fn setup_camera_and_light(mut commands: Commands) {
-    // spawn main camera looking at the center of the board
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(0.0, 6.0, 7.5).looking_at(Vec3::new(0.0, -0.5, 0.0), Vec3::Y),
     ));
-
-    // spawn directional light to simulate overhead room lighting
     commands.spawn((
         DirectionalLight {
             shadows_enabled: true,
@@ -117,6 +120,7 @@ fn check_gltf_loaded(
     println!("Visual models extracted successfully.");
 }
 
+
 fn collect_tile_parts(
     node_handle: &Handle<GltfNode>,
     gltf_nodes: &Assets<GltfNode>,
@@ -126,30 +130,28 @@ fn collect_tile_parts(
     is_root: bool,
 ) {
     let Some(node) = gltf_nodes.get(node_handle) else { return; };
+
+    // strictly strip ONLY the root node to remove the artist's table placements
+    // DO NOT override child rotations, ensuring front and back meshes stay connected
     let local_transform = if is_root { Transform::IDENTITY } else { node.transform };
     let current_transform = accumulated_transform * local_transform;
 
-    if let Some(mesh_handle) = &node.mesh && let Some(gltf_mesh) = gltf_meshes.get(mesh_handle) {
-        for primitive in &gltf_mesh.primitives {
-            if let Some(material_handle) = &primitive.material {
-                out_list.push(TilePart {
-                    mesh: primitive.mesh.clone(),
-                    material: material_handle.clone(),
-                    transform: current_transform,
-                });
+    if let Some(mesh_handle) = &node.mesh {
+        if let Some(gltf_mesh) = gltf_meshes.get(mesh_handle) {
+            for primitive in &gltf_mesh.primitives {
+                if let Some(material_handle) = &primitive.material {
+                    out_list.push(TilePart {
+                        mesh: primitive.mesh.clone(),
+                        material: material_handle.clone(),
+                        transform: current_transform,
+                    });
+                }
             }
         }
     }
 
     for child_handle in &node.children {
-        collect_tile_parts(
-            child_handle,
-            gltf_nodes,
-            gltf_meshes,
-            current_transform,
-            out_list,
-            false,
-        );
+        collect_tile_parts(child_handle, gltf_nodes, gltf_meshes, current_transform, out_list, false);
     }
 }
 
@@ -170,97 +172,208 @@ fn get_tile_model_name(tile: &Tile) -> String {
     }
 }
 
-// updates the player's hand tiles whenever hands, draws, or omniscience changes
 fn render_hands_system(
     mut commands: Commands,
-    players_query: Query<(Entity, &Hand, &Jikaze, Option<&DrawnTile>, Has<HumanPlayer>), Or<(Changed<Hand>, Changed<DrawnTile>)>>,
+    players_query: Query<(Entity, &Hand, &Jikaze, Option<&DrawnTile>, Has<HumanPlayer>, Ref<Hand>, Option<Ref<DrawnTile>>)>,
     omniscience: Res<Omniscience>,
     tile_models: Res<TileModels>,
     existing_visual_tiles: Query<(Entity, &VisualHandTile)>,
 ) {
-    // track which players had their hands updated this frame
-    let mut updated_players = HashSet::new();
+    if tile_models.models.is_empty() { return; }
+    let force_redraw = tile_models.is_changed();
 
-    for (player_entity, hand, jikaze, maybe_drawn, is_human) in &players_query {
-        updated_players.insert(player_entity);
+    for (player_entity, hand, jikaze, maybe_drawn, is_human, ref_hand, maybe_ref_drawn) in &players_query {
+        let hand_changed = ref_hand.is_changed();
+        let drawn_changed = maybe_ref_drawn.map(|reference| reference.is_changed()).unwrap_or(false);
 
-        // despawn any existing visual hand tiles for this player
-        for (visual_entity, visual_tile) in &existing_visual_tiles {
-            if visual_tile.owner == player_entity {
-                commands.entity(visual_entity).despawn();
+        if force_redraw || hand_changed || drawn_changed {
+            for (visual_entity, visual_tile) in &existing_visual_tiles {
+                if visual_tile.owner == player_entity {
+                    commands.entity(visual_entity).despawn();
+                }
             }
-        }
 
-        let seat_index = jikaze.0.to_num();
-        let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
+            let seat_index = jikaze.0.to_num();
+            let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
 
-        // calculate hand layout dimensions
-        let spacing_x = 0.28;
-        let tile_scale = 0.015;
-        let total_tiles = hand.0.len() + if maybe_drawn.is_some() { 1 } else { 0 };
-        let hand_width = (total_tiles as f32 - 1.0) * spacing_x;
+            let spacing_x = 0.28;
+            let tile_scale = 0.015;
+            let total_tiles = hand.0.len() + if maybe_drawn.is_some() { 1 } else { 0 };
+            let hand_width = (total_tiles as f32 - 1.0) * spacing_x;
 
-        let local_start_x = -hand_width / 2.0;
-        let base_hand_position = Vec3::new(0.0, 0.0, 3.2);
+            let local_start_x = -hand_width / 2.0;
+            let base_hand_position = Vec3::new(0.0, 0.0, 3.2);
 
-        // spawn tiles in hand
-        for (index, tile) in hand.0.iter().enumerate() {
-            let offset_x = local_start_x + (index as f32 * spacing_x);
-            let local_position = Vec3::new(offset_x, 0.0, 0.0);
-            let world_position = seat_rotation.mul_vec3(base_hand_position + local_position);
+            // base mesh is already standing up
+            for (index, tile) in hand.0.iter().enumerate() {
+                let offset_x = local_start_x + (index as f32 * spacing_x);
+                let local_position = Vec3::new(offset_x, 0.0, 0.0);
+                let world_position = seat_rotation.mul_vec3(base_hand_position + local_position);
 
-            let final_rotation = if is_human {
-                // human tiles always face the camera (outward)
-                seat_rotation
-            } else if omniscience.0 {
-                // bots are revealed: face them inward to look at the center/camera
-                seat_rotation * Quat::from_rotation_y(std::f32::consts::PI)
-            } else {
-                // bots are hidden: face them outward so their backs face the center
-                seat_rotation
-            };
+                let final_rotation = if !is_human && omniscience.0 {
+                    // tiles facing inwards
+                    seat_rotation * Quat::from_rotation_y(std::f32::consts::PI)
+                } else {
+                    // tiles facing outwards
+                    seat_rotation
+                };
 
-            spawn_tile_instance(
-                &mut commands,
-                &tile_models,
-                tile,
-                player_entity,
-                world_position,
-                final_rotation,
-                tile_scale,
-            );
-        }
+                spawn_tile_instance(&mut commands, &tile_models, tile, player_entity, world_position, final_rotation, tile_scale, true);
+            }
 
-        // spawn the drawn tile separated slightly from the main hand
-        if let Some(drawn) = maybe_drawn {
-            let offset_x = (local_start_x + (hand.0.len() as f32 * spacing_x)) + 0.12;
-            let local_position = Vec3::new(offset_x, 0.0, 0.0);
-            let world_position = seat_rotation.mul_vec3(base_hand_position + local_position);
+            if let Some(drawn) = maybe_drawn {
+                let offset_x = (local_start_x + (hand.0.len() as f32 * spacing_x)) + 0.12;
+                let local_position = Vec3::new(offset_x, 0.0, 0.0);
+                let world_position = seat_rotation.mul_vec3(base_hand_position + local_position);
 
-            let final_rotation = if is_human {
-                seat_rotation
-            } else if omniscience.0 {
-                seat_rotation * Quat::from_rotation_y(std::f32::consts::PI)
-            } else {
-                seat_rotation
-            };
+                let final_rotation = if is_human || omniscience.0 {
+                    seat_rotation
+                } else {
+                    seat_rotation * Quat::from_rotation_y(std::f32::consts::PI)
+                };
 
-            spawn_tile_instance(
-                &mut commands,
-                &tile_models,
-                &drawn.0,
-                player_entity,
-                world_position,
-                final_rotation,
-                tile_scale,
-            );
+                spawn_tile_instance(&mut commands, &tile_models, &drawn.0, player_entity, world_position, final_rotation, tile_scale, true);
+            }
         }
     }
 }
 
 
-// helper to spawn a visual tile hierarchy using model parts
+fn render_kawa_system(
+    mut commands: Commands,
+    players_query: Query<(Entity, &Kawa, &Jikaze, Ref<Kawa>)>,
+    tile_models: Res<TileModels>,
+    existing_kawa_tiles: Query<(Entity, &VisualKawaTile)>,
+) {
+    if tile_models.models.is_empty() { return; }
+    let force_redraw = tile_models.is_changed();
+
+    for (player_entity, kawa, jikaze, ref_kawa) in &players_query {
+        if force_redraw || ref_kawa.is_changed() {
+            for (visual_entity, visual_tile) in &existing_kawa_tiles {
+                if visual_tile.owner == player_entity {
+                    commands.entity(visual_entity).despawn();
+                }
+            }
+
+            let seat_index = jikaze.0.to_num();
+            let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
+
+            let spacing_x = 0.19;
+            let spacing_z = 0.24;
+            let tile_scale = 0.015;
+
+            // facing up, head facing center
+            let flat_rotation = seat_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+
+
+            for (index, tile) in kawa.0.iter().enumerate() {
+                let row_index = index / 6;
+                let col_index = index % 6;
+
+                // kinda center-ish
+                let base_kawa_position = Vec3::new(-0.5, 0.0, 1.0);
+
+                let offset_x = col_index as f32 * spacing_x;
+                // new row descending
+                let offset_z = row_index as f32 * spacing_z;
+
+                let local_position = base_kawa_position + Vec3::new(offset_x, 0.0, offset_z);
+                let world_position = seat_rotation.mul_vec3(local_position);
+
+                spawn_tile_instance(&mut commands, &tile_models, tile, player_entity, world_position, flat_rotation, tile_scale, false);
+            }
+        }
+    }
+}
+
+// TODO: called tile indicator
+fn render_open_mentsu_system(
+    mut commands: Commands,
+    players_query: Query<(Entity, &OpenMentsu, &Jikaze, Ref<OpenMentsu>)>,
+    tile_models: Res<TileModels>,
+    existing_mentsu_tiles: Query<(Entity, &VisualMentsuTile)>,
+) {
+    if tile_models.models.is_empty() { return; }
+    let force_redraw = tile_models.is_changed();
+
+    for (player_entity, open_mentsu, jikaze, ref_mentsu) in &players_query {
+        if force_redraw || ref_mentsu.is_changed() {
+            for (visual_entity, visual_tile) in &existing_mentsu_tiles {
+                if visual_tile.owner == player_entity {
+                    commands.entity(visual_entity).despawn();
+                }
+            }
+
+            let seat_index = jikaze.0.to_num();
+            let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
+
+            let spacing_x = 0.19;
+            let tile_scale = 0.015;
+
+            let mut current_offset_x = 2.0;
+            let base_position = Vec3::new(0.0, 0.0, 3.2);
+
+            let flat_rotation = seat_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+
+            for mentsu in open_mentsu.0.iter() {
+                for tile in mentsu.tiles() {
+                    let local_position = Vec3::new(current_offset_x, 0.0, 0.0);
+                    let world_position = seat_rotation.mul_vec3(base_position + local_position);
+
+                    spawn_mentsu_instance(&mut commands, &tile_models, tile, player_entity, world_position, flat_rotation, tile_scale);
+
+                    current_offset_x += spacing_x;
+                }
+                current_offset_x += 0.1;
+            }
+        }
+    }
+}
+
 fn spawn_tile_instance(
+    commands: &mut Commands,
+    tile_models: &TileModels,
+    tile: &Tile,
+    owner: Entity,
+    position: Vec3,
+    rotation: Quat,
+    scale: f32,
+    is_hand: bool,
+) {
+    let name = get_tile_model_name(tile);
+    let Some(parts) = tile_models.models.get(&name) else { return; };
+
+    for part in parts {
+        let part_transform = Transform {
+            translation: position + rotation.mul_vec3(part.transform.translation * scale),
+            rotation: rotation * part.transform.rotation,
+            scale: Vec3::splat(scale) * part.transform.scale,
+        };
+
+        if is_hand {
+            commands.spawn((
+                VisualHandTile { owner },
+                Mesh3d(part.mesh.clone()),
+                MeshMaterial3d(part.material.clone()),
+                part_transform,
+                Visibility::default(),
+                InheritedVisibility::default(),
+            ));
+        } else {
+            commands.spawn((
+                VisualKawaTile { owner },
+                Mesh3d(part.mesh.clone()),
+                MeshMaterial3d(part.material.clone()),
+                part_transform,
+                Visibility::default(),
+                InheritedVisibility::default(),
+            ));
+        }
+    }
+}
+
+fn spawn_mentsu_instance(
     commands: &mut Commands,
     tile_models: &TileModels,
     tile: &Tile,
@@ -270,91 +383,46 @@ fn spawn_tile_instance(
     scale: f32,
 ) {
     let name = get_tile_model_name(tile);
-    let Some(parts) = tile_models.models.get(&name) else {
-        println!("Warning: No visual model found for: {}", name);
-        return;
-    };
-
-    let parent_entity = commands.spawn((
-        VisualHandTile { owner },
-        Transform {
-            translation: position,
-            rotation,
-            scale: Vec3::splat(scale),
-        },
-        Visibility::default(),
-        InheritedVisibility::default(),
-    )).id();
+    let Some(parts) = tile_models.models.get(&name) else { return; };
 
     for part in parts {
-        let child_entity = commands.spawn((
+        let part_transform = Transform {
+            translation: position + rotation.mul_vec3(part.transform.translation * scale),
+            rotation: rotation * part.transform.rotation,
+            scale: Vec3::splat(scale) * part.transform.scale,
+        };
+
+        commands.spawn((
+            VisualMentsuTile { owner },
             Mesh3d(part.mesh.clone()),
             MeshMaterial3d(part.material.clone()),
-            part.transform,
-        )).id();
-        commands.entity(parent_entity).add_child(child_entity);
+            part_transform,
+            Visibility::default(),
+            InheritedVisibility::default(),
+        ));
     }
 }
 
-// updates the kawa discards layout on the table
-fn render_discards_system(
+fn cleanup_orphaned_visuals_system(
     mut commands: Commands,
-    discarded_tiles_query: Query<(Entity, &DiscardedTile, &DiscardedBy), Without<VisualDiscardAttached>>,
-    players_query: Query<&Jikaze>,
-    kawa_query: Query<&Kawa>,
-    tile_models: Res<TileModels>,
+    visual_hands: Query<(Entity, &VisualHandTile)>,
+    visual_kawa: Query<(Entity, &VisualKawaTile)>,
+    visual_mentsu: Query<(Entity, &VisualMentsuTile)>,
+    players_query: Query<&Hand>,
 ) {
-    for (discard_entity, discarded_tile, discarded_by) in &discarded_tiles_query {
-        let Ok(jikaze) = players_query.get(discarded_by.0) else { continue };
-        let Ok(kawa) = kawa_query.get(discarded_by.0) else { continue };
-
-        // calculate index of this tile in the owner's kawa
-        let Some(index) = kawa.0.iter().position(|tile| *tile == discarded_tile.0) else { continue };
-
-        let seat_index = jikaze.0.to_num();
-        let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
-
-        // kawa layout metrics (laying tiles flat in rows of 6)
-        let spacing_x = 0.28;
-        let spacing_z = 0.38;
-        let tile_scale = 0.015;
-        let row_index = index / 6;
-        let col_index = index % 6;
-
-        let base_kawa_position = Vec3::new(-0.7, 0.0, 1.2);
-        let offset_x = col_index as f32 * spacing_x;
-        // grow discard pile row-by-row towards the center of the table
-        let offset_z = -(row_index as f32 * spacing_z);
-
-        let local_position = base_kawa_position + Vec3::new(offset_x, 0.0, offset_z);
-        let world_position = seat_rotation.mul_vec3(local_position);
-
-        // rotate tile to lie flat face-up on the table
-        let flat_rotation = seat_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
-
-        let name = get_tile_model_name(&discarded_tile.0);
-        if let Some(parts) = tile_models.models.get(&name) {
-            // override the position of the logical discard entity
-            commands.entity(discard_entity).insert((
-                Transform {
-                    translation: world_position,
-                    rotation: flat_rotation,
-                    scale: Vec3::splat(tile_scale),
-                },
-                Visibility::default(),
-                InheritedVisibility::default(),
-                VisualDiscardAttached,
-            ));
-
-            // attach the mesh parts as children
-            for part in parts {
-                let child_entity = commands.spawn((
-                    Mesh3d(part.mesh.clone()),
-                    MeshMaterial3d(part.material.clone()),
-                    part.transform,
-                )).id();
-                commands.entity(discard_entity).add_child(child_entity);
-            }
+    for (visual_entity, visual_tile) in &visual_hands {
+        if players_query.get(visual_tile.owner).is_err() {
+            commands.entity(visual_entity).despawn();
+        }
+    }
+    for (visual_entity, visual_tile) in &visual_kawa {
+        if players_query.get(visual_tile.owner).is_err() {
+            commands.entity(visual_entity).despawn();
+        }
+    }
+    for (visual_entity, visual_tile) in &visual_mentsu {
+        if players_query.get(visual_tile.owner).is_err() {
+            commands.entity(visual_entity).despawn();
         }
     }
 }

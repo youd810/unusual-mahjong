@@ -163,7 +163,7 @@ pub struct Alive;
 pub struct Kawa(pub Vec<Tile>);
 
 // ! a component to an entity (each tile is its own entity)
-#[derive(Component)] 
+#[derive(Component, Clone)] 
 pub struct DiscardedTile(pub Tile);
 
 #[derive(Component)]

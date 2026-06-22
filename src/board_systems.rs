@@ -2291,7 +2291,7 @@ pub fn build_round_summary(
     }
 }
 
-
+// TODO: despawn tile entity
 pub fn round_cleanup(
     mut query: Query<(Entity, &mut Jikaze, Has<Oya>)>,
     alive_query: Query<&Alive>,
@@ -2421,6 +2421,7 @@ pub fn round_cleanup(
 pub fn match_transition(
     mut game: ResMut<GameState>,
     mut alive_query: Query<(Entity, &mut Points, &mut Jikaze, Has<HumanPlayer>), With<Alive>>,
+    dead_query: Query<Entity, (With<PlayerTag>, Without<Alive>)>,
     tile_query: Query<Entity, With<DiscardedTile>>,
     mut revolver: ResMut<Revolver>,
     mut replay_log: Option<ResMut<ReplayLog>>,
@@ -2439,12 +2440,11 @@ pub fn match_transition(
         .collect();
     alive.sort_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(&b.2)));
 
-    let mut human_eliminated = false;
     let mut eliminated_player: Option<Entity> = None;
 
     // natural end: eliminate lowest scorer
     if alive.len() == expected_players {
-        let (loser, _, _, is_human) = alive.pop().unwrap();
+        let (loser, _, _, _) = alive.pop().unwrap();
         eliminated_player = Some(loser);
 
         commands.entity(loser).remove::<Alive>();
@@ -2459,8 +2459,9 @@ pub fn match_transition(
         commands.entity(loser).remove::<Furiten>();
         commands.entity(loser).remove::<DrawnTile>();
         commands.entity(loser).remove::<Oya>();
-
-        if is_human { human_eliminated = true; }
+    } else {
+        // unnatural end: someone was already shot/eliminated during the round
+        eliminated_player = dead_query.iter().next();
     }
 
     // advance phase
@@ -2536,13 +2537,12 @@ pub fn match_transition(
 
     let human_alive = alive.iter().any(|(_, _, _, is_human)| *is_human);
 
-    if human_eliminated || !human_alive {
+    if !human_alive {
         next_state.set(TurnState::HumanDeadMenu);
     } else {
         next_state.set(TurnState::StartNewRound);
     }
 }
-
 
 
 pub fn game_cleanup(
