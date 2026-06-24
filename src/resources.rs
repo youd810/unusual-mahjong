@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use crate::core::*;
 use crate::states::*;
 use crate::scoring::*;
-use rand::RngExt;
+use rand::{RngExt, seq::SliceRandom};
 
 
 #[derive(Resource)]
@@ -31,15 +31,84 @@ pub struct CurrentTurn(pub Entity); // id of the current tsumo
 
 
 #[derive(Resource)]
-pub struct Wall(pub Vec<Tile>);
-
-#[derive(Resource)]
-pub struct DeadWall {
-    pub dora_indicators: Vec<Tile>,
-    pub ura_indicators: Vec<Tile>,
-    pub rinshan_tiles: Vec<Tile>,
-    pub filler_tiles: Vec<Tile>, // The remaining face-down tiles to maintain the 14 count
+pub struct Wall {
+    pub tiles: Vec<Tile>,
+    pub head: usize,
+    pub tail: usize,
+    pub dora_count: usize,
+    pub rinshan_draws: usize,
+    pub rinshan_max: usize,
+    pub dice_roll: usize, // add this
 }
+
+impl Wall {
+    pub fn new(mut tiles: Vec<Tile>, phase: MatchPhase, dice_roll: usize) -> Self {
+        tiles.shuffle(&mut rand::rng());
+        let rinshan_max = match phase {
+            MatchPhase::Yonma => 4,
+            MatchPhase::Sanma | MatchPhase::Nima => 8,
+        };
+
+        Self {
+            tiles,
+            head: 0,
+            tail: 136 - 14,
+            dora_count: 1,
+            rinshan_draws: 0,
+            rinshan_max,
+            dice_roll,
+        }
+    }
+
+    pub fn draw(&mut self) -> Option<Tile> {
+        if self.head >= self.tail { return None; }
+        let tile = self.tiles[self.head];
+        self.head += 1;
+        Some(tile)
+    }
+
+    pub fn rinshan_draw(&mut self) -> Option<Tile> {
+        if self.rinshan_draws >= self.rinshan_max { return None; }
+
+        // rinshan tiles sit at the very start of the dead wall section
+        let idx = self.tiles.len() - 14 + self.rinshan_draws;
+        let tile = self.tiles[idx];
+
+        self.rinshan_draws += 1;
+        self.tail -= 1; // supplement the dead wall by pushing the boundary backwards
+        Some(tile)
+    }
+
+    pub fn get_dora_indicators(&self) -> Vec<Tile> {
+        let mut dora = Vec::new();
+        let base_idx = self.tiles.len() - 14 + self.rinshan_max;
+        for i in 0..self.dora_count {
+            dora.push(self.tiles[base_idx + (i * 2)]);
+        }
+        dora
+    }
+
+    pub fn get_ura_indicators(&self) -> Vec<Tile> {
+        let mut ura = Vec::new();
+        let base_idx = self.tiles.len() - 14 + self.rinshan_max;
+        for i in 0..self.dora_count {
+            ura.push(self.tiles[base_idx + (i * 2) + 1]);
+        }
+        ura
+    }
+
+    pub fn remaining_draws(&self) -> usize {
+        self.tail.saturating_sub(self.head)
+    }
+}
+
+//#[derive(Resource)]
+//pub struct DeadWall {
+//    pub dora_indicators: Vec<Tile>,
+//    pub ura_indicators: Vec<Tile>,
+//    pub rinshan_tiles: Vec<Tile>,
+//    pub filler_tiles: Vec<Tile>, // The remaining face-down tiles to maintain the 14 count
+//}
 
 
 #[derive(Debug, Clone)]

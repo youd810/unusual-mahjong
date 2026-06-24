@@ -201,7 +201,6 @@ pub fn bot_discard_system(
     )>,
     visible_query: Query<(Entity, &OpenMentsu, &Kawa, Has<Riichi>)>,
     wall: Res<Wall>,
-    dead_wall: Res<DeadWall>,
     revolver: Res<Revolver>,
     mut messages: MessageWriter<DiscardTileMessage>,
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
@@ -259,7 +258,7 @@ pub fn bot_discard_system(
             }
         }
 
-        for tile in dead_wall.dora_indicators.iter() {
+        for tile in wall.get_dora_indicators().iter() {
             visible_tiles[tile_to_index(tile)] += 1;
         }
 
@@ -321,8 +320,8 @@ pub fn bot_discard_system(
 
         let target_yaku = determine_bot_strategy(
             &hand_plus_drawn, revolver.chamber, 
-            profile, wall.0.len(), 
-            current_shanten, &dead_wall.dora_indicators
+            profile, wall.remaining_draws(), 
+            current_shanten, &wall.get_dora_indicators(),
         );
 
         let discard = evaluate_discard(
@@ -330,7 +329,7 @@ pub fn bot_discard_system(
             &visible_tiles, &safe_tiles,
             should_defend, forbidden_slice,
             target_yaku,
-            &dead_wall.dora_indicators,
+            &wall.get_dora_indicators(),
             &kawa.0
         );
 
@@ -363,7 +362,6 @@ pub fn bot_call_system(
     )>,
     game: Res<GameState>,
     wall: Res<Wall>,
-    dead_wall: Res<DeadWall>,
     revolver: Res<Revolver>,
     mut commands: Commands,
 ) {
@@ -390,8 +388,8 @@ pub fn bot_call_system(
 
         let target_yaku = determine_bot_strategy(
             &hand.0, revolver.chamber, profile,
-            wall.0.len(), calculate_shanten(&combine_tiles(&hand.0, &open_mentsu.0)),
-            &dead_wall.dora_indicators
+            wall.remaining_draws(), calculate_shanten(&combine_tiles(&hand.0, &open_mentsu.0)),
+            &wall.get_dora_indicators(),
         );
 
         // closed yaku early return
@@ -484,7 +482,7 @@ pub fn bot_call_system(
             let shanten = calculate_shanten_from_array(&mut freq);
             let ukeire = ukeire_tiles(&mut freq, shanten).len() as i32;
             let han = estimate_yaku_han(&combined, &jikaze.0, &game.bakaze) as i32;
-            let dora = count_dora(&combined, &*dead_wall, false, &nuked_tiles.0).dora as i32;
+            let dora = count_dora(&combined, &*wall, false, &nuked_tiles.0).dora as i32;
             (han, -shanten, ukeire, dora)
         };
 
@@ -620,7 +618,7 @@ pub fn bot_main_phase_system(
     visible_query: Query<(Entity, Has<Riichi>)>,
     revolver: Res<Revolver>,
     game: Res<GameState>,
-    dead_wall: Res<DeadWall>,
+    wall: Res<Wall>,
     mut tsumo_writer: MessageWriter<DeclareTsumoMessage>,
     mut kan_writer: MessageWriter<DeclareKanMessage>,
     mut kyuushu_writer: MessageWriter<DeclareKyuushuMessage>,
@@ -673,7 +671,7 @@ pub fn bot_main_phase_system(
 
                 // estimate current han value
                 let estimated_yaku_han = estimate_yaku_han(&full_hand, &jikaze.0, &game.bakaze);
-                let dora_count = count_dora(&full_hand, &dead_wall, false, &nuked_tiles.0).dora;
+                let dora_count = count_dora(&full_hand, &*wall, false, &nuked_tiles.0).dora;
                 let total_estimated_han = estimated_yaku_han + dora_count;
 
                 if death_risk > effective_aggressiveness + 0.1 { // base addition
@@ -738,7 +736,7 @@ pub fn bot_cheat_execution_system(
     mut query: Query<(Entity, &mut Hand, &OpenMentsu, &NukedTiles, Option<&mut DrawnTile>, &BotCheatIntent, Has<Riichi>), Without<HumanPlayer>>,
     mut kawa_query: Query<(Entity, &mut Kawa)>,
     open_query: Query<(Entity, &OpenMentsu)>,
-    dead_wall: Res<DeadWall>,
+    wall: Res<Wall>,
     timer: Res<BlackoutTimer>,
     mut cheat_log: ResMut<CheatLog>,
     mut replay_log: Option<ResMut<ReplayLog>>,
@@ -771,7 +769,7 @@ pub fn bot_cheat_execution_system(
                 for tile in mentsu.tiles() { visible_tiles[tile_to_index(tile)] += 1; }
             }
         }
-        for tile in &dead_wall.dora_indicators {
+        for tile in &wall.get_dora_indicators() {
             visible_tiles[tile_to_index(tile)] += 1;
         }
 
@@ -781,7 +779,7 @@ pub fn bot_cheat_execution_system(
         let current_ukeire: i32 = ukeire_tiles(&mut current_freq, current_shanten).iter()
             .map(|&j| (4 - current_freq[j] as i32 - visible_tiles[j]).max(0))
             .sum();
-        let current_dora = count_dora(&combined_current, &*dead_wall, is_riichi, &nuked_tiles.0).dora as i32;
+        let current_dora = count_dora(&combined_current, &*wall, is_riichi, &nuked_tiles.0).dora as i32;
 
         let baseline_score = (current_shanten, -current_ukeire, -current_dora);
         let mut best_score = baseline_score;
@@ -803,7 +801,7 @@ pub fn bot_cheat_execution_system(
                     let ukeire: i32 = ukeire_tiles(&mut temp_freq, shanten).iter()
                         .map(|&j| (4 - temp_freq[j] as i32 - visible_tiles[j]).max(0))
                         .sum();
-                    let dora = count_dora(&combined_temp, &*dead_wall, is_riichi, &nuked_tiles.0).dora as i32;
+                    let dora = count_dora(&combined_temp, &*wall, is_riichi, &nuked_tiles.0).dora as i32;
 
                     let score = (shanten, -ukeire, -dora);
 

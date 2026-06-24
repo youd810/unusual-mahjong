@@ -817,7 +817,6 @@ pub fn can_declare_ron(
     bakaze: &Wind,
     jikaze: &Wind,
     wall: &Wall,
-    dead_wall: &DeadWall,
     is_chankan: bool,
     calls_made: bool,
     has_temp_furiten: bool,
@@ -862,7 +861,6 @@ pub fn can_declare_ron(
         false, // ron can't be rinshan
         is_chankan,
         wall,
-        dead_wall,
         calls_made,
         nuked_tiles
     );
@@ -891,7 +889,6 @@ pub fn can_declare_tsumo(
     bakaze: &Wind,
     jikaze: &Wind,
     wall: &Wall,
-    dead_wall: &DeadWall,
     is_rinshan: bool,
     calls_made: bool,
 ) -> Option<HandResult> {
@@ -935,7 +932,6 @@ pub fn can_declare_tsumo(
         is_rinshan,
         false, // tsumo can't chankan 
         wall,
-        dead_wall,
         calls_made,
         nuked_tiles
     );
@@ -962,7 +958,6 @@ pub fn best_potential_result(
     bakaze: &Wind,
     jikaze: &Wind,
     wall: &Wall,
-    dead_wall: &DeadWall,
     calls_made: bool,
     visible_tiles: &[u8; 34],
 ) -> Option<HandResult> {
@@ -985,7 +980,7 @@ pub fn best_potential_result(
                 tile, hand, open_mentsu, nuked_tiles, tenpai,
                 is_closed, is_oya, kawa,
                 is_riichi, is_double_riichi, is_ippatsu,
-                bakaze, jikaze, wall, dead_wall,
+                bakaze, jikaze, wall,
                 false, calls_made,
             )
             && best.as_ref().is_none_or(|b| is_better(&result, b)) {
@@ -1030,7 +1025,7 @@ pub fn best_potential_result(
                         wait, &after_discard, open_mentsu, nuked_tiles, &temp_tenpai,
                         is_closed, is_oya, kawa,
                         is_riichi, is_double_riichi, is_ippatsu,
-                        bakaze, jikaze, wall, dead_wall,
+                        bakaze, jikaze, wall,
                         false, calls_made,
                     )
                     && best.as_ref().is_none_or(|b| is_better(&result, b)) {
@@ -1060,7 +1055,6 @@ pub fn build_loser_tilt_info(
     is_ippatsu: bool,
     bakaze: &Wind,
     wall: &Wall,
-    dead_wall: &DeadWall,
     calls_made: bool,
     visible_tiles: &[u8; 34],
 ) -> LoserTiltInfo {
@@ -1068,7 +1062,7 @@ pub fn build_loser_tilt_info(
         &hand.0, &open_mentsu.0, &nuked_tiles.0, tenpai,
         is_closed, is_oya, kawa,
         is_riichi, is_double_riichi, is_ippatsu,
-        bakaze, &jikaze.0, wall, dead_wall,
+        bakaze, &jikaze.0, wall,
         calls_made, visible_tiles,
     );
 

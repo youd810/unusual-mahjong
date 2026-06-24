@@ -114,6 +114,10 @@ pub struct BotAccusationIntent {
 #[derive(Component)]
 pub struct Jikaze(pub Wind);
 
+// physical seat
+#[derive(Component)]
+pub struct Seat(pub u8);
+
 #[derive(Component)]
 pub struct Points(pub i32);
 

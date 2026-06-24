@@ -37,6 +37,9 @@ pub struct VisualMentsuTile {
     pub owner: Entity,
 }
 
+#[derive(Component)]
+pub struct VisualWallTile;
+
 pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
@@ -47,6 +50,7 @@ impl Plugin for VisualsPlugin {
                 check_gltf_loaded,
                 render_hands_system.run_if(resource_exists::<TileModels>),
                 render_kawa_system.run_if(resource_exists::<TileModels>),
+                render_wall_system.run_if(resource_exists::<TileModels>),
                 render_open_mentsu_system.run_if(resource_exists::<TileModels>),
                 cleanup_orphaned_visuals_system,
             ));
@@ -174,7 +178,7 @@ fn get_tile_model_name(tile: &Tile) -> String {
 
 fn render_hands_system(
     mut commands: Commands,
-    players_query: Query<(Entity, &Hand, &Jikaze, Option<&DrawnTile>, Has<HumanPlayer>, Ref<Hand>, Option<Ref<DrawnTile>>)>,
+    players_query: Query<(Entity, &Hand, &Seat, Option<&DrawnTile>, Has<HumanPlayer>, Ref<Hand>, Option<Ref<DrawnTile>>)>,
     omniscience: Res<Omniscience>,
     tile_models: Res<TileModels>,
     existing_visual_tiles: Query<(Entity, &VisualHandTile)>,
@@ -182,7 +186,7 @@ fn render_hands_system(
     if tile_models.models.is_empty() { return; }
     let force_redraw = tile_models.is_changed();
 
-    for (player_entity, hand, jikaze, maybe_drawn, is_human, ref_hand, maybe_ref_drawn) in &players_query {
+    for (player_entity, hand, seat, maybe_drawn, is_human, ref_hand, maybe_ref_drawn) in &players_query {
         let hand_changed = ref_hand.is_changed();
         let drawn_changed = maybe_ref_drawn.map(|reference| reference.is_changed()).unwrap_or(false);
 
@@ -193,10 +197,10 @@ fn render_hands_system(
                 }
             }
 
-            let seat_index = jikaze.0.to_num();
+            let seat_index = seat.0;
             let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
 
-            let spacing_x = 0.28;
+            let spacing_x = 0.18;
             let tile_scale = 0.015;
             let total_tiles = hand.0.len() + if maybe_drawn.is_some() { 1 } else { 0 };
             let hand_width = (total_tiles as f32 - 1.0) * spacing_x;
@@ -241,14 +245,14 @@ fn render_hands_system(
 
 fn render_kawa_system(
     mut commands: Commands,
-    players_query: Query<(Entity, &Kawa, &Jikaze, Ref<Kawa>)>,
+    players_query: Query<(Entity, &Kawa, &Seat, Ref<Kawa>)>,
     tile_models: Res<TileModels>,
     existing_kawa_tiles: Query<(Entity, &VisualKawaTile)>,
 ) {
     if tile_models.models.is_empty() { return; }
     let force_redraw = tile_models.is_changed();
 
-    for (player_entity, kawa, jikaze, ref_kawa) in &players_query {
+    for (player_entity, kawa, seat, ref_kawa) in &players_query {
         if force_redraw || ref_kawa.is_changed() {
             for (visual_entity, visual_tile) in &existing_kawa_tiles {
                 if visual_tile.owner == player_entity {
@@ -256,7 +260,7 @@ fn render_kawa_system(
                 }
             }
 
-            let seat_index = jikaze.0.to_num();
+            let seat_index = seat.0;
             let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
 
             let spacing_x = 0.19;
@@ -287,17 +291,128 @@ fn render_kawa_system(
     }
 }
 
+// TODO: haipai https://www.youtube.com/watch?v=7BNe02MWLg0
+pub fn render_wall_system(
+    mut commands: Commands,
+    wall: Option<Res<crate::resources::Wall>>,
+    tile_models: Res<TileModels>,
+    existing_wall_tiles: Query<Entity, With<VisualWallTile>>,
+) {
+    let Some(wall) = wall else { return };
+    if tile_models.models.is_empty() { return; }
+
+    // Run if the wall changed OR if the glTF models just finished loading
+    if !wall.is_changed() && !tile_models.is_changed() { return; }
+
+    // clear the old wall meshes
+    for entity in &existing_wall_tiles {
+        commands.entity(entity).despawn();
+    }
+
+    let tile_scale = 0.015;
+    let stack_spacing = 0.19; 
+    let tile_height = 0.14;
+    let wall_radius = 1.9;
+
+    let base_idx = wall.tiles.len() - 14 + wall.rinshan_max;
+
+    for index in 0..wall.tiles.len() {
+        // skip standard draws
+        if index < wall.head { continue; }
+
+        // skip rinshan draws
+        let is_rinshan_zone = index >= (wall.tiles.len() - 14) && index < base_idx;
+        if is_rinshan_zone {
+            let rinshan_offset = index - (wall.tiles.len() - 14);
+            if rinshan_offset < wall.rinshan_draws { continue; }
+        }
+
+         let dead_wall_start = wall.tiles.len() - 14;
+
+        // remap linear index to a global stack position (0–67)
+        let (global_stack, is_bottom) = if index < dead_wall_start {
+            // live wall: index 0 placed next to dead wall, growing away from it
+            let last_live_stack = (dead_wall_start / 2) - 1; // stack 60
+            (last_live_stack - (index / 2), index % 2 != 0)
+        } else {
+            // dead wall: continues from where live wall ends
+            let dw_offset = index - dead_wall_start;
+            ((dead_wall_start / 2) + (dw_offset / 2), dw_offset % 2 != 0)
+        };
+
+        let side = global_stack / 17;
+        let stack = global_stack % 17;
+
+        let side_rotation = Quat::from_rotation_y(side as f32 * std::f32::consts::FRAC_PI_2);
+
+        // center the 17 stacks. 
+        //wall_radius is positive so Side 0 is at the bottom (east)
+        let dead_wall_start = wall.tiles.len() - 14;
+        let is_dead_wall = index >= dead_wall_start;
+
+        let local_x = (stack as f32 - 8.0) * stack_spacing + if is_dead_wall { stack_spacing * 0.6 } else { 0.0 };
+        let local_y = if is_bottom { 0.0 } else { tile_height };
+        let local_z = wall_radius;
+
+        
+
+        let local_position = Vec3::new(local_x, local_y, local_z);
+        let world_position = side_rotation.mul_vec3(local_position);
+
+        let is_dora = index >= base_idx
+            && index < base_idx + (wall.dora_count * 2)
+            && (index - base_idx) % 2 == 0;
+
+        // 1. placement rotation: All tiles face down to keep the glTF pivots perfectly uniform
+        let placement_rotation = side_rotation * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+
+        // 2. visual rotation: Only applied to the mesh itself
+        let visual_rotation = if is_dora {
+            // flips the mesh 180 degrees over its local axis so it faces up, without moving the pivot
+            placement_rotation * Quat::from_rotation_x(std::f32::consts::PI)
+        } else {
+            placement_rotation
+        };
+
+        let tile = &wall.tiles[index];
+        let name = get_tile_model_name(tile);
+
+        if let Some(parts) = tile_models.models.get(&name) {
+            for part in parts {
+                // apply placement_rotation to the offset so the wall geometry remains a perfect square
+                let part_offset = placement_rotation.mul_vec3(part.transform.translation * tile_scale);
+
+                let part_transform = Transform {
+                    translation: world_position + part_offset,
+                    rotation: visual_rotation * part.transform.rotation,
+                    scale: Vec3::splat(tile_scale) * part.transform.scale,
+                };
+
+                commands.spawn((
+                    VisualWallTile,
+                    Mesh3d(part.mesh.clone()),
+                    MeshMaterial3d(part.material.clone()),
+                    part_transform,
+                    Visibility::default(),
+                    InheritedVisibility::default(),
+                ));
+            }
+        }
+    }
+}
+
+
 // TODO: called tile indicator
 fn render_open_mentsu_system(
     mut commands: Commands,
-    players_query: Query<(Entity, &OpenMentsu, &Jikaze, Ref<OpenMentsu>)>,
+    players_query: Query<(Entity, &OpenMentsu, &Seat, Ref<OpenMentsu>)>,
     tile_models: Res<TileModels>,
     existing_mentsu_tiles: Query<(Entity, &VisualMentsuTile)>,
 ) {
     if tile_models.models.is_empty() { return; }
     let force_redraw = tile_models.is_changed();
 
-    for (player_entity, open_mentsu, jikaze, ref_mentsu) in &players_query {
+    for (player_entity, open_mentsu, seat, ref_mentsu) in &players_query {
         if force_redraw || ref_mentsu.is_changed() {
             for (visual_entity, visual_tile) in &existing_mentsu_tiles {
                 if visual_tile.owner == player_entity {
@@ -305,7 +420,7 @@ fn render_open_mentsu_system(
                 }
             }
 
-            let seat_index = jikaze.0.to_num();
+            let seat_index = seat.0;
             let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
 
             let spacing_x = 0.19;

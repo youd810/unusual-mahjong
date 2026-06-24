@@ -238,7 +238,6 @@ pub fn info_display_ui_system(
     mut contexts: EguiContexts,
     game: Res<GameState>,
     wall: Res<Wall>,
-    dead_wall: Res<DeadWall>,
     current_turn: Res<CurrentTurn>,
     player_query: Query<(
         Entity, &Points, &Jikaze, &Hand, &Kawa, &OpenMentsu, &NukedTiles,
@@ -259,19 +258,19 @@ pub fn info_display_ui_system(
                 MatchPhase::Nima => "Nima",
             };
             ui.label(format!("{} {:?} {} | Honba: {} | Wall: {}",
-                match_str, game.bakaze, game.rounds, game.honba, wall.0.len()));
+                match_str, game.bakaze, game.rounds, game.honba, wall.remaining_draws()));
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label("Dora:");
-                for indicator in &dead_wall.dora_indicators {
-                    let dora = crate::scoring::get_dora_from_indicator(indicator);
+                for indicator in wall.get_dora_indicators() {
+                    let dora = crate::scoring::get_dora_from_indicator(&indicator);
                     ui.label(format!("{:?}", dora));
                 }
             });
             if omniscience.0 {
                 ui.label("next draws:");
                 ui.horizontal_wrapped(|ui| {
-                    for tile in wall.0.iter().take(5) {
+                    for tile in wall.tiles[wall.head..].iter().take(8) {
                         ui.label(format!("{:?}", tile));
                     }
                 });
@@ -621,7 +620,7 @@ fn apply_debug_hand(
         commands.entity(player).remove::<ClosedHand>();
     }
 
-    wall.0.insert(0, draw);
+    wall.tiles.insert(wall.head, draw);
     current_turn.0 = player;
     next_state.set(TurnState::Draw);
 }

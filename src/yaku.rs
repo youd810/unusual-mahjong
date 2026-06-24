@@ -362,11 +362,11 @@ pub fn pinfu(result: &[Mentsu], winning_tile: &Tile, jikaze: &Wind, bakaze: &Win
 
 
 pub fn haitei(wall: &Wall, is_tsumo: bool) -> bool {
-    wall.0.is_empty() && is_tsumo
+    wall.remaining_draws() == 0 && is_tsumo
 }
 
 pub fn houtei(wall: &Wall, is_tsumo: bool) -> bool {
-    wall.0.is_empty() && !is_tsumo
+    wall.remaining_draws() == 0 && !is_tsumo
 }
 
 pub fn tenhou(kawa: &Kawa, is_oya: bool, is_tsumo: bool, calls_made: bool) -> bool {

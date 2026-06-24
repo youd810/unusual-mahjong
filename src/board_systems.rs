@@ -437,7 +437,7 @@ pub fn check_ryuukyoku(
         return; 
     }
 
-    if wall.0.is_empty() {
+    if wall.remaining_draws() == 0 {
         println!("Ryuukyoku! Wall exhausted. Oya tenpai: {}", *oya_tenpai_query);
         let mut nagashi_winners: Vec<(Entity, HandResult, u32)> = vec![];
         let mut any_oya_won = false;
@@ -518,7 +518,6 @@ pub fn ron_check(
     discard_query: Query<(&DiscardedTile, &DiscardedBy, Has<Chankan>), With<CurrentDiscard>>,
     game: Res<GameState>,
     wall: Res<Wall>,
-    dead_wall: Res<DeadWall>,
     mut commands: Commands,
 ) {
     let Ok((discarded_tile, discarded_by, is_chankan)) = discard_query.single() else {
@@ -533,7 +532,7 @@ pub fn ron_check(
         if let Some(result) = can_declare_ron(
             &discarded_tile.0, &hand.0, &open_mentsu.0, &nuked_tiles.0, tenpai,
             is_closed, is_oya, kawa, is_riichi, is_double, is_ippatsu,
-            &game.bakaze, &jikaze.0, &*wall, &*dead_wall,
+            &game.bakaze, &jikaze.0, &*wall,
             is_chankan, game.calls_made, has_temp_furiten
         ) {
             commands.entity(player).insert(RonOption {
@@ -560,7 +559,6 @@ pub fn declare_ron(
     visible_query: Query<(Entity, &Kawa, &OpenMentsu)>,
     mut game: ResMut<GameState>,
     wall: Res<Wall>,
-    dead_wall: Res<DeadWall>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
     mut ron_writer: MessageWriter<RonDealtMessage>,
@@ -611,7 +609,7 @@ pub fn declare_ron(
             }
         }
     }
-    for tile in &dead_wall.dora_indicators {
+    for tile in &wall.get_dora_indicators() {
         visible_tiles[tile_to_index(tile)] += 1;
     }
 
@@ -676,7 +674,7 @@ pub fn declare_ron(
         let loser_tilt = build_loser_tilt_info(
             loser, hand, open, nuked_tiles, tenpai, kawa, jikaze, // PASSED nuked_tiles
             is_closed, is_oya, is_riichi, is_double, is_ippatsu,
-            &game.bakaze, &*wall, &*dead_wall, game.calls_made, &visible_tiles,
+            &game.bakaze, &*wall, game.calls_made, &visible_tiles,
         );
 
         ron_writer.write(RonDealtMessage {
@@ -788,7 +786,6 @@ pub fn tsumo_check(
         Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>, Has<DrawnFromRinshan>)>,
     game: Res<GameState>,
     wall: Res<Wall>,
-    dead_wall: Res<DeadWall>,
     mut commands: Commands,
 ) {
     if let Ok((hand, open_mentsu, nuked_tiles, tenpai, kawa, jikaze, drawn,
@@ -798,7 +795,7 @@ pub fn tsumo_check(
             &drawn.0, &hand.0, &open_mentsu.0, &nuked_tiles.0,
             tenpai, is_closed, is_oya, kawa,
             is_riichi, is_double, is_ippatsu,
-            &game.bakaze, &jikaze.0, &*wall, &*dead_wall,
+            &game.bakaze, &jikaze.0, &*wall,
             is_rinshan, game.calls_made,
         ) {
             commands.entity(current_turn.0).insert(TsumoOption { result });
@@ -817,7 +814,6 @@ pub fn declare_tsumo(
     ), With<Alive>>,
     visible_query: Query<(Entity, &Kawa, &OpenMentsu)>,
     wall: Res<Wall>,
-    dead_wall: Res<DeadWall>,
     mut game: ResMut<GameState>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut tsumo_writer: MessageWriter<TsumoDealtMessage>,
@@ -879,14 +875,14 @@ pub fn declare_tsumo(
                     }
                 }
             }
-            for tile in &dead_wall.dora_indicators {
+            for tile in &wall.get_dora_indicators() {
                 visible_tiles[tile_to_index(tile)] += 1;
             }
 
             losers.push(build_loser_tilt_info(
                 entity, hand, open, nuked_tiles, tenpai, kawa, jikaze, // PASSED nuked_tiles
                 is_closed, is_oya_l, is_riichi, is_double, is_ippatsu,
-                &game.bakaze, &*wall, &*dead_wall, game.calls_made, &visible_tiles,
+                &game.bakaze, &*wall, game.calls_made, &visible_tiles,
             ));
         }
 
@@ -1153,7 +1149,7 @@ pub fn riichi_check(
     mut commands: Commands,
 ) {
     if let Ok((hand, drawn, points, is_closed, is_riichi)) = query.get(current_turn.0) {
-        if is_riichi || !is_closed || points.0 < 1000 || wall.0.len() < 4 {
+        if is_riichi || !is_closed || points.0 < 1000 || wall.remaining_draws() < 4 {
             return;
         }
 
@@ -1576,7 +1572,7 @@ pub fn declare_drawn_kan(
     mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&DrawnTile>)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
     mut game: ResMut<GameState>,
-    mut dead_wall: ResMut<DeadWall>,
+    mut wall: ResMut<Wall>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut lock: ResMut<CallLock>,
@@ -1603,12 +1599,9 @@ pub fn declare_drawn_kan(
             if count == 4 {
                 open_mentsu.0.push(Mentsu::Ankan([*tile; 4]));
 
-                let new_dora = dead_wall.filler_tiles.remove(0);
-                let new_ura =  dead_wall.filler_tiles.remove(0);
-                dead_wall.dora_indicators.push(new_dora);
-                dead_wall.ura_indicators.push(new_ura);
+                wall.dora_count += 1;
 
-                hand.0.retain(|x| x != tile);
+                hand.0.retain(|hand_tile| hand_tile != tile);
                 kan_successful_type = Some(Kantsu::Ankan);
                 game.pending_rinshan = true;
             }
@@ -1641,7 +1634,7 @@ pub fn declare_drawn_kan(
                             tile: *tile,
                         });
                         log.events.push(ReplayEvent::DoraRevealed {
-                            indicator: *dead_wall.dora_indicators.last().unwrap(),
+                            indicator: *wall.get_dora_indicators().last().unwrap(),
                         });
                     }
 
@@ -1833,41 +1826,33 @@ pub fn declare_nukidora(
 }
 
 
-pub fn spawn_camera(mut commands: Commands) { 
-    commands.spawn(Camera2d::default()); 
-}
+// !pub fn spawn_camera(mut commands: Commands) { 
+// !    commands.spawn(Camera2d::default()); 
+// !}
 
 pub fn start_game(
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>
 ) {
-    let mut wall = vec![];
+    let mut tiles = vec![];
     for _ in 0..4 {
-        wall.extend(all_tiles());
+        tiles.extend(all_tiles());
     }
-    wall.shuffle(&mut rand::rng());
 
-    let seats = [Wind::East, Wind::South, Wind::West, Wind::North];
+    let mut wall = Wall::new(tiles, MatchPhase::Yonma);
+    let first_dora = wall.get_dora_indicators()[0];
+
+    let seats =[Wind::East, Wind::South, Wind::West, Wind::North];
     let mut starting_player = Entity::PLACEHOLDER;
-
-    let dora_indicators: Vec<Tile> = wall.drain(..1).collect();
-    let first_dora = dora_indicators[0];
-    let ura_indicators: Vec<Tile> = wall.drain(..1).collect();
-    let rinshan_tiles: Vec<Tile> = wall.drain(..4).collect();
-    let filler_tiles: Vec<Tile> = wall.drain(..8).collect();
-
-    commands.insert_resource(DeadWall {
-        dora_indicators,
-        ura_indicators,
-        rinshan_tiles,
-        filler_tiles,
-    });
 
     let mut seat_info: Vec<(Entity, Wind, i32)> = vec![];
     let mut hand_info: Vec<(Entity, Vec<Tile>)> = vec![];
 
     for (i, wind) in seats.iter().enumerate() {
-        let mut starting_hand: Vec<Tile> = wall.drain(wall.len() - 13..).collect();
+        let mut starting_hand: Vec<Tile> = vec![];
+        for _ in 0..13 {
+            starting_hand.push(wall.draw().unwrap());
+        }
         starting_hand.sort();
         let hand_snapshot = starting_hand.clone();
 
@@ -1875,6 +1860,7 @@ pub fn start_game(
             PlayerTag,
             Points(25000),
             Jikaze(*wind),
+            Seat(i as u8),
             Hand(starting_hand),
             OpenMentsu(vec![]),
             Kawa(vec![]),
@@ -1929,7 +1915,7 @@ pub fn start_game(
         }
     );
     commands.insert_resource(CurrentTurn(starting_player));
-    commands.insert_resource(Wall(wall));
+    commands.insert_resource(wall);
 
     println!("ゲーム開始");
     next_state.set(TurnState::Draw);
@@ -1942,16 +1928,17 @@ pub fn draw_tile(
     mut wall: ResMut<Wall>,
     mut query: Query<(Entity, Has<Furiten>, Has<Riichi>)>,
     mut commands: Commands,
-    mut next_state: ResMut<NextState<TurnState>>, // used to change the game phase
+    mut next_state: ResMut<NextState<TurnState>>,
     mut replay_log: Option<ResMut<ReplayLog>>,
 ) {
     // this wouldn't cause a panic because the ryuukyoku check would end the game right there and then
-    let drawn = wall.0.remove(0);
+    let drawn = wall.draw().unwrap();
     commands.entity(current_turn.0).insert(DrawnTile(drawn));
 
-    if let Ok((player, _, is_riichi)) = query.get(current_turn.0)
-    && !is_riichi {
-        commands.entity(player).remove::<Furiten>();
+    if let Ok((player, _, is_riichi)) = query.get(current_turn.0) {
+        if !is_riichi {
+            commands.entity(player).remove::<Furiten>();
+        }
     }
 
     if let Some(ref mut log) = replay_log {
@@ -1962,16 +1949,13 @@ pub fn draw_tile(
     }
 
     next_state.set(TurnState::MainPhase);
-
     println!("{} draws {:?}", current_turn.0, drawn);
 }
-
 
 
 pub fn rinshan_draw(
     current_turn: Res<CurrentTurn>,
     mut wall: ResMut<Wall>,
-    mut dead_wall: ResMut<DeadWall>,
     mut game: ResMut<GameState>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
@@ -1979,15 +1963,13 @@ pub fn rinshan_draw(
 ) {
     game.pending_rinshan = false;
 
-    let drawn = dead_wall.rinshan_tiles.remove(0);
+    let drawn = wall.rinshan_draw().unwrap();
     println!("{} draws {:?} from rinshan", current_turn.0, drawn);
 
     commands.entity(current_turn.0).insert((
         DrawnTile(drawn),
         DrawnFromRinshan,
     ));
-
-    dead_wall.filler_tiles.push(wall.0.pop().unwrap());
 
     if let Some(ref mut log) = replay_log {
         log.events.push(ReplayEvent::RinshanDraw {
@@ -2009,7 +1991,7 @@ pub fn discard_tile(
     current_turn: Res<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
     mut game: ResMut<GameState>,
-    mut dead_wall: ResMut<DeadWall>,
+    mut wall: ResMut<Wall>,
     mut replay_log: Option<ResMut<ReplayLog>>,
 ) {
     let mut processed = false;
@@ -2078,15 +2060,12 @@ pub fn discard_tile(
             }
 
             if game.pending_kan_dora {
-                let new_dora = dead_wall.filler_tiles.remove(0);
-                let new_ura =  dead_wall.filler_tiles.remove(0);
-                dead_wall.dora_indicators.push(new_dora);
-                dead_wall.ura_indicators.push(new_ura);
+                wall.dora_count += 1;
                 game.pending_kan_dora = false;
 
                 if let Some(ref mut log) = replay_log {
                     log.events.push(ReplayEvent::DoraRevealed {
-                        indicator: new_dora,
+                        indicator: *wall.get_dora_indicators().last().unwrap(),
                     });
                 }
             }
@@ -2111,7 +2090,7 @@ pub fn next_turn(
     round_result: Option<Res<RoundResult>>,
     mut next_state: ResMut<NextState<TurnState>>,
 ) {
-    if round_result.is_some() || wall.0.is_empty() { return; }
+    if round_result.is_some() || wall.remaining_draws() == 0 { return; }
 
     if let Ok((_, current_jikaze)) = query.get(current_turn.0) {
         let mut wind = current_jikaze.0.next_turn_wind();
@@ -2170,35 +2149,21 @@ pub fn start_round(
     }
     println!("--- New Round: {} Bakaze: {:?}, Honba: {} ---", game.rounds, game.bakaze, game.honba);
 
-    let mut wall = vec![];
+    let mut tiles = vec![];
     for _ in 0..4 {
-        wall.extend(all_tiles());
+        tiles.extend(all_tiles());
     }
-    wall.shuffle(&mut rand::rng());
 
-    // dynamic split based on match phase
-    let (rinshan_count, filler_count) = match game.match_phase {
-        MatchPhase::Yonma => (4, 8),
-        MatchPhase::Sanma | MatchPhase::Nima => (8, 4),
-    };
-
-    let dora_indicators: Vec<Tile> = wall.drain(..1).collect();
-    let first_dora = dora_indicators[0];
-    let ura_indicators: Vec<Tile> = wall.drain(..1).collect();
-    let rinshan_tiles: Vec<Tile> = wall.drain(..rinshan_count).collect();
-    let filler_tiles: Vec<Tile> = wall.drain(..filler_count).collect();
-
-    commands.insert_resource(DeadWall {
-        dora_indicators,
-        ura_indicators,
-        rinshan_tiles,
-        filler_tiles,
-    });
+    let mut wall = Wall::new(tiles, game.match_phase);
+    let first_dora = wall.get_dora_indicators()[0];
 
     let mut hand_info: Vec<(Entity, Vec<Tile>)> = vec![];
 
     for (entity, mut hand, mut nuked_tiles) in &mut query {
-        let starting_hand: Vec<Tile> = wall.drain(wall.len() - 13..).collect();
+        let mut starting_hand: Vec<Tile> = vec![];
+        for _ in 0..13 {
+            starting_hand.push(wall.draw().unwrap());
+        }
         hand.0 = starting_hand;
         hand.0.sort();
         nuked_tiles.0.clear();
@@ -2215,7 +2180,7 @@ pub fn start_round(
         });
     }
 
-    commands.insert_resource(Wall(wall));
+    commands.insert_resource(wall);
     next_state.set(TurnState::Draw);
 }
 
