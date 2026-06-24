@@ -38,11 +38,12 @@ pub struct Wall {
     pub dora_count: usize,
     pub rinshan_draws: usize,
     pub rinshan_max: usize,
-    pub dice_roll: usize, // add this
+    pub dice_roll: usize,
+    pub oya_seat: u8, // Add this
 }
 
 impl Wall {
-    pub fn new(mut tiles: Vec<Tile>, phase: MatchPhase, dice_roll: usize) -> Self {
+    pub fn new(mut tiles: Vec<Tile>, phase: MatchPhase, dice_roll: usize, oya_seat: u8) -> Self {
         tiles.shuffle(&mut rand::rng());
         let rinshan_max = match phase {
             MatchPhase::Yonma => 4,
@@ -57,6 +58,7 @@ impl Wall {
             rinshan_draws: 0,
             rinshan_max,
             dice_roll,
+            oya_seat,
         }
     }
 

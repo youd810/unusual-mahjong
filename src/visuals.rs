@@ -292,6 +292,7 @@ fn render_kawa_system(
 }
 
 // TODO: haipai https://www.youtube.com/watch?v=7BNe02MWLg0
+// TODO: Kandora is broken
 pub fn render_wall_system(
     mut commands: Commands,
     wall: Option<Res<crate::resources::Wall>>,
@@ -317,69 +318,84 @@ pub fn render_wall_system(
     let base_idx = wall.tiles.len() - 14 + wall.rinshan_max;
 
     for index in 0..wall.tiles.len() {
-        // skip standard draws
+        // 1. Skip standard drawn tiles
         if index < wall.head { continue; }
 
-        // skip rinshan draws
-        let is_rinshan_zone = index >= (wall.tiles.len() - 14) && index < base_idx;
-        if is_rinshan_zone {
-            let rinshan_offset = index - (wall.tiles.len() - 14);
-            if rinshan_offset < wall.rinshan_draws { continue; }
+        // 2. Skip drawn rinshan tiles (matches the backwards array mapping)
+        let mut was_rinshan_drawn = false;
+        for r in 0..wall.rinshan_draws {
+            let stack_offset = r / 2;
+            let is_bot = r % 2 != 0;
+            let base_stack_idx = wall.tiles.len() - 2 - (stack_offset * 2);
+            let rinshan_idx = base_stack_idx + if is_bot { 1 } else { 0 };
+
+            if index == rinshan_idx {
+                was_rinshan_drawn = true;
+                break;
+            }
         }
+        if was_rinshan_drawn { continue; }
 
-         let dead_wall_start = wall.tiles.len() - 14;
+        // 3. Native logical mapping (0 is the first draw, 67 is the Rinshan stack)
+        let logical_stack = index / 2;
+        let is_bottom = index % 2 != 0;
 
-        // remap linear index to a global stack position (0–67)
-        let (global_stack, is_bottom) = if index < dead_wall_start {
-            // live wall: index 0 placed next to dead wall, growing away from it
-            let last_live_stack = (dead_wall_start / 2) - 1; // stack 60
-            (last_live_stack - (index / 2), index % 2 != 0)
-        } else {
-            // dead wall: continues from where live wall ends
-            let dw_offset = index - dead_wall_start;
-            ((dead_wall_start / 2) + (dw_offset / 2), dw_offset % 2 != 0)
-        };
+        // 4. Calculate where the table breaks based on dice roll
+        // The break happens `dice_roll` stacks from the RIGHT edge.
+        let break_side = (wall.oya_seat as usize + wall.dice_roll - 1) % 4;
 
-        let side = global_stack / 17;
-        let stack = global_stack % 17;
+        // 5. The first drawn tile is exactly to the left of the counted stacks.
+        // If we count 11 from the right (stacks 16 down to 6), the first draw is stack 5.
+        let first_draw_stack_in_side = 16 - wall.dice_roll;
+        let first_draw_global = (break_side * 17) + first_draw_stack_in_side;
+
+        // 6. Map logical_stack to physical_stack moving CLOCKWISE (subtracting instead of adding)
+        // Add 68 before modulo to prevent negative numbers
+        let physical_stack = (first_draw_global + 68 - logical_stack) % 68;
+
+        let side = physical_stack / 17;
+        let stack = physical_stack % 17;
 
         let side_rotation = Quat::from_rotation_y(side as f32 * std::f32::consts::FRAC_PI_2);
 
-        // center the 17 stacks. 
-        //wall_radius is positive so Side 0 is at the bottom (east)
-        let dead_wall_start = wall.tiles.len() - 14;
-        let is_dead_wall = index >= dead_wall_start;
+        // 7. Visual offset for the Wanpai (Dead Wall)
+        // The Wanpai is the last 7 stacks. Since we draw clockwise, we need to push it
+        // slightly counter-clockwise to create a visual gap from the end of the live wall.
+        let is_dead_wall = logical_stack >= 61;
+        let gap_offset = if is_dead_wall { -stack_spacing * 0.6 } else { 0.0 };
 
-        let local_x = (stack as f32 - 8.0) * stack_spacing + if is_dead_wall { stack_spacing * 0.6 } else { 0.0 };
+        let local_x = (stack as f32 - 8.0) * stack_spacing + gap_offset;
         let local_y = if is_bottom { 0.0 } else { tile_height };
         let local_z = wall_radius;
-
-        
 
         let local_position = Vec3::new(local_x, local_y, local_z);
         let world_position = side_rotation.mul_vec3(local_position);
 
-        let is_dora = index >= base_idx
-            && index < base_idx + (wall.dora_count * 2)
-            && (index - base_idx) % 2 == 0;
+        // 8. Dora indicator check
+        let mut is_dora = false;
+        let rinshan_stacks = wall.rinshan_max / 2;
+        for i in 0..wall.dora_count {
+            let dora_idx = wall.tiles.len() - 2 - (rinshan_stacks + i) * 2;
+            if index == dora_idx {
+                is_dora = true;
+                break;
+            }
+        }
 
-        // 1. placement rotation: All tiles face down to keep the glTF pivots perfectly uniform
+        // 9. Final Rotations
         let placement_rotation = side_rotation * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
-
-        // 2. visual rotation: Only applied to the mesh itself
         let visual_rotation = if is_dora {
-            // flips the mesh 180 degrees over its local axis so it faces up, without moving the pivot
             placement_rotation * Quat::from_rotation_x(std::f32::consts::PI)
         } else {
             placement_rotation
         };
 
+        // 10. Spawning
         let tile = &wall.tiles[index];
         let name = get_tile_model_name(tile);
 
         if let Some(parts) = tile_models.models.get(&name) {
             for part in parts {
-                // apply placement_rotation to the offset so the wall geometry remains a perfect square
                 let part_offset = placement_rotation.mul_vec3(part.transform.translation * tile_scale);
 
                 let part_transform = Transform {

@@ -1839,22 +1839,46 @@ pub fn start_game(
         tiles.extend(all_tiles());
     }
 
-    let mut wall = Wall::new(tiles, MatchPhase::Yonma);
+    let dice_roll = rand::rng().random_range(2..=12) as usize;
+    let oya_seat = 0; // East is always seat 0 at the start of the match
+    let mut wall = Wall::new(tiles, MatchPhase::Yonma, dice_roll, oya_seat);
     let first_dora = wall.get_dora_indicators()[0];
+
+    let break_seat = match (oya_seat as usize + dice_roll - 1) % 4 {
+        0 => "East", 1 => "South", 2 => "West", 3 => "North", _ => "?",
+    };
+    println!("Dice Roll: {} | Counting from: East Seat | Cut on: {}'s Wall ({} stacks from right edge)",
+        dice_roll, break_seat, dice_roll);
 
     let seats =[Wind::East, Wind::South, Wind::West, Wind::North];
     let mut starting_player = Entity::PLACEHOLDER;
+
+    let mut starting_hands: [Vec<Tile>; 4] = [vec![], vec![], vec![], vec![]];
+
+    // 3 rounds of 4 tiles
+    for _ in 0..3 {
+        for player_index in 0..4 {
+            for _ in 0..4 {
+                starting_hands[player_index].push(wall.draw().unwrap());
+            }
+        }
+    }
+    // 1 round of 1 tile
+    for player_index in 0..4 {
+        starting_hands[player_index].push(wall.draw().unwrap());
+    }
 
     let mut seat_info: Vec<(Entity, Wind, i32)> = vec![];
     let mut hand_info: Vec<(Entity, Vec<Tile>)> = vec![];
 
     for (i, wind) in seats.iter().enumerate() {
-        let mut starting_hand: Vec<Tile> = vec![];
-        for _ in 0..13 {
-            starting_hand.push(wall.draw().unwrap());
-        }
+        let mut starting_hand = starting_hands[i].clone();
         starting_hand.sort();
         let hand_snapshot = starting_hand.clone();
+
+        // Oya gets their 14th tile directly (Chon-Chon), but because this game triggers `TurnState::Draw` immediately on turn 1,
+        // we just deal 13 to everyone and let the TurnState naturally give the 14th tile to East.
+        // In real life, East takes two tiles at the end. We mimic the final result mathematically.
 
         let mut player = commands.spawn((
             PlayerTag,
@@ -2135,7 +2159,7 @@ pub fn auto_advance_call_window(
 
 
 pub fn start_round(
-    mut query: Query<(Entity, &mut Hand, &mut NukedTiles), With<Alive>>,
+    mut query: Query<(Entity, &mut Hand, &mut NukedTiles, &Jikaze, &Seat), With<Alive>>,
     alive_check: Query<(), With<Alive>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<TurnState>>,
@@ -2154,17 +2178,42 @@ pub fn start_round(
         tiles.extend(all_tiles());
     }
 
-    let mut wall = Wall::new(tiles, game.match_phase);
+    let mut players: Vec<_> = query.iter_mut().collect();
+    players.sort_by_key(|(_, _, _, jikaze, _)| jikaze.0.to_num());
+
+    let dice_roll = rand::rng().random_range(2..=12) as usize;
+    let dealer_seat = players[0].4.0; // Index 0 is East due to the sort
+
+    let mut wall = Wall::new(tiles, game.match_phase, dice_roll, dealer_seat);
     let first_dora = wall.get_dora_indicators()[0];
+
+    let dealer_seat_name = match dealer_seat { 0 => "East", 1 => "South", 2 => "West", 3 => "North", _ => "?" };
+    let break_seat_name = match (dealer_seat as usize + dice_roll - 1) % 4 { 0 => "East", 1 => "South", 2 => "West", 3 => "North", _ => "?" };
+
+    println!("Dice Roll: {} | Counting from: {} Seat | Cut on: {}'s Wall ({} stacks from right edge)",
+        dice_roll, dealer_seat_name, break_seat_name, dice_roll);
+
+    // Collect and sort players by Wind to guarantee East gets dealt first
+    let mut players: Vec<_> = query.iter_mut().collect();
+    players.sort_by_key(|(_, _, _, jikaze, _)| jikaze.0.to_num());
+
+    let mut starting_hands: Vec<Vec<Tile>> = vec![vec![]; players.len()];
+
+    for _ in 0..3 {
+        for player_index in 0..players.len() {
+            for _ in 0..4 {
+                starting_hands[player_index].push(wall.draw().unwrap());
+            }
+        }
+    }
+    for player_index in 0..players.len() {
+        starting_hands[player_index].push(wall.draw().unwrap());
+    }
 
     let mut hand_info: Vec<(Entity, Vec<Tile>)> = vec![];
 
-    for (entity, mut hand, mut nuked_tiles) in &mut query {
-        let mut starting_hand: Vec<Tile> = vec![];
-        for _ in 0..13 {
-            starting_hand.push(wall.draw().unwrap());
-        }
-        hand.0 = starting_hand;
+    for (index, (entity, mut hand, mut nuked_tiles, _, _)) in players.into_iter().enumerate() {
+        hand.0 = starting_hands[index].clone();
         hand.0.sort();
         nuked_tiles.0.clear();
         hand_info.push((entity, hand.0.clone()));
