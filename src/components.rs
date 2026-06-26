@@ -166,6 +166,12 @@ pub struct Alive;
 #[derive(Component)]
 pub struct Kawa(pub Vec<Tile>);
 
+#[derive(Component, Default)]
+pub struct CalledKawaIndices(pub Vec<usize>);
+
+#[derive(Component)]
+pub struct TileWasCalled;
+
 // ! a component to an entity (each tile is its own entity)
 #[derive(Component, Clone)] 
 pub struct DiscardedTile(pub Tile);

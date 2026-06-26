@@ -46,6 +46,11 @@ pub struct VisualRiichiStick {
     pub owner: Entity,
 }
 
+#[derive(Component)]
+pub struct VisualNukidoraTile {
+    pub owner: Entity,
+}
+
 pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
@@ -58,8 +63,8 @@ impl Plugin for VisualsPlugin {
                 render_kawa_system.run_if(resource_exists::<TileModels>),
                 render_wall_system.run_if(resource_exists::<TileModels>),
                 render_open_mentsu_system.run_if(resource_exists::<TileModels>),
+                render_nukidora_system.run_if(resource_exists::<TileModels>),
                 cleanup_orphaned_visuals_system,
-                // add these two
                 spawn_riichi_stick_system,
                 cleanup_riichi_sticks_system,
             ));
@@ -252,17 +257,24 @@ fn render_hands_system(
 }
 
 
+// TODO: despawn called tiles from kawa
+// ! either that or stick with rendering the vector and ditch the entity logic
 fn render_kawa_system(
     mut commands: Commands,
-    players_query: Query<(Entity, &Kawa, &Seat, Ref<Kawa>, Option<&Riichi>)>,
+    players_query: Query<(Entity, &Kawa, &Seat, Ref<Kawa>, Option<&Riichi>, Option<Ref<CalledKawaIndices>>)>,
     tile_models: Res<TileModels>,
     existing_kawa_tiles: Query<(Entity, &VisualKawaTile)>,
 ) {
     if tile_models.models.is_empty() { return; }
     let force_redraw = tile_models.is_changed();
 
-    for (player_entity, kawa, seat, ref_kawa, maybe_riichi) in &players_query {
-        if force_redraw || ref_kawa.is_changed() {
+    for (player_entity, kawa, seat, ref_kawa, maybe_riichi, maybe_called) in &players_query {
+
+        // Check if either the Kawa array OR the called indices updated
+        let kawa_changed = ref_kawa.is_changed();
+        let called_changed = maybe_called.as_ref().is_some_and(|c| c.is_changed() || c.is_added());
+
+        if force_redraw || kawa_changed || called_changed {
             for (visual_entity, visual_tile) in &existing_kawa_tiles {
                 if visual_tile.owner == player_entity {
                     commands.entity(visual_entity).despawn();
@@ -275,31 +287,47 @@ fn render_kawa_system(
             let spacing_x = 0.19;
             let spacing_z = 0.24;
             let tile_scale = 0.015;
-
-            // facing up, head facing center
             let flat_rotation = seat_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
 
-            // calculate which index is the riichi discard
             let riichi_index = maybe_riichi.map(|r| kawa.0.len().saturating_sub(1 + r.turns_since as usize));
 
+            // Extract the actual vector out of the Ref wrapper
+            let skipped_indices = maybe_called.as_ref().map(|c| c.0.clone()).unwrap_or_default();
+
+            // calculate the visual position of the riichi tile to shift the row correctly
+            let mut r_visual_idx = 0;
+            if let Some(r_idx) = riichi_index {
+                if !skipped_indices.contains(&r_idx) {
+                    for i in 0..r_idx {
+                        if !skipped_indices.contains(&i) { r_visual_idx += 1; }
+                    }
+                }
+            }
+
+            let mut visual_index = 0;
+
             for (index, tile) in kawa.0.iter().enumerate() {
-                let row_index = index / 6;
-                let col_index = index % 6;
+                if skipped_indices.contains(&index) { continue; } // skip called tile
+
+                let row_index = visual_index / 6;
+                let col_index = visual_index % 6;
 
                 // kinda center-ish
                 let base_kawa_position = Vec3::new(-0.5, 0.0, 1.0);
 
                 let mut offset_x = col_index as f32 * spacing_x;
 
-                // add horizontal spacing for the riichi tile and push subsequent tiles in the row
                 if let Some(r_idx) = riichi_index {
-                    let r_row = r_idx / 6;
-                    let r_col = r_idx % 6;
-                    if row_index == r_row {
-                        if col_index == r_col {
-                            offset_x += spacing_x * 0.15; // shift the riichi tile slightly
-                        } else if col_index > r_col {
-                            offset_x += spacing_x * 0.3; // shift all following tiles in this row
+                    if !skipped_indices.contains(&r_idx) {
+                        let r_row = r_visual_idx / 6;
+                        let r_col = r_visual_idx % 6;
+
+                        if row_index == r_row {
+                            if col_index == r_col {
+                                offset_x += spacing_x * 0.15;
+                            } else if col_index > r_col {
+                                offset_x += spacing_x * 0.3;
+                            }
                         }
                     }
                 }
@@ -318,6 +346,8 @@ fn render_kawa_system(
                 };
 
                 spawn_tile_instance(&mut commands, &tile_models, tile, player_entity, world_position, final_rotation, tile_scale, false);
+
+                visual_index += 1;
             }
         }
     }
@@ -498,7 +528,6 @@ pub fn render_wall_system(
 }
 
 
-// TODO: called tile indicator
 fn render_open_mentsu_system(
     mut commands: Commands,
     players_query: Query<(Entity, &OpenMentsu, &Seat, Ref<OpenMentsu>)>,
@@ -552,25 +581,25 @@ fn render_open_mentsu_system(
 
                 let mut saved_kan_x = 0.0;
 
-                                for (visual_i, (orig_i, tile)) in display_items.into_iter().enumerate() {
+                for (visual_i, (orig_i, tile)) in display_items.into_iter().enumerate() {
                     let is_added_kan = matches!(mentsu, Mentsu::Shouminkan(..)) && orig_i == 3;
                     let is_rotated = Some(visual_i) == visual_rot_idx || is_added_kan;
-                    // ankan indicator: outer tiles are face down
                     let is_face_down = matches!(mentsu, Mentsu::Ankan(_)) && (orig_i == 0 || orig_i == 3);
 
                     let mut local_x = current_offset_x;
-                    let mut local_y = 0.0;
+                    let mut local_z = 0.0; // use Z for depth
 
                     if is_added_kan {
                         local_x = saved_kan_x;
-                        local_y = 0.14; // stack height
+                        local_z = -0.19; // Shift forward into the table
                     } else if is_rotated {
                         current_offset_x += spacing_x * 0.15;
                         local_x = current_offset_x;
                         saved_kan_x = current_offset_x;
                     }
 
-                    let local_position = Vec3::new(local_x, local_y, 0.0);
+                    // Y remains 0.0 so it rests flat, Z controls depth
+                    let local_position = Vec3::new(local_x, 0.0, local_z);
                     let world_position = seat_rotation.mul_vec3(base_position + local_position);
 
                     let tile_rotation = if is_rotated {
@@ -591,6 +620,63 @@ fn render_open_mentsu_system(
                     }
                 }
                 current_offset_x += 0.1;
+            }
+        }
+    }
+}
+
+
+fn render_nukidora_system(
+    mut commands: Commands,
+    players_query: Query<(Entity, &NukedTiles, &Seat, Ref<NukedTiles>)>,
+    tile_models: Res<TileModels>,
+    existing_nuki_tiles: Query<(Entity, &VisualNukidoraTile)>,
+) {
+    if tile_models.models.is_empty() { return; }
+    let force_redraw = tile_models.is_changed();
+
+    for (player_entity, nuked, seat, ref_nuked) in &players_query {
+        if force_redraw || ref_nuked.is_changed() {
+            for (visual_entity, visual_tile) in &existing_nuki_tiles {
+                if visual_tile.owner == player_entity {
+                    commands.entity(visual_entity).despawn();
+                }
+            }
+
+            let seat_index = seat.0;
+            let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
+
+            let spacing_x = 0.19;
+            let tile_scale = 0.015;
+
+            // position to the right of the kawa
+            let base_position = Vec3::new(1.0, 0.0, 1.0);
+            let flat_rotation = seat_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+
+            for (index, tile) in nuked.0.iter().enumerate() {
+                let offset_x = index as f32 * spacing_x;
+                let local_position = base_position + Vec3::new(offset_x, 0.0, 0.0);
+                let world_position = seat_rotation.mul_vec3(local_position);
+
+                let name = get_tile_model_name(tile);
+                if let Some(parts) = tile_models.models.get(&name) {
+                    for part in parts {
+                        let part_transform = Transform {
+                            translation: world_position + flat_rotation.mul_vec3(part.transform.translation * tile_scale),
+                            rotation: flat_rotation * part.transform.rotation,
+                            scale: Vec3::splat(tile_scale) * part.transform.scale,
+                        };
+
+                        commands.spawn((
+                            VisualNukidoraTile { owner: player_entity },
+                            Mesh3d(part.mesh.clone()),
+                            MeshMaterial3d(part.material.clone()),
+                            part_transform,
+                            Visibility::default(),
+                            InheritedVisibility::default(),
+                        ));
+                    }
+                }
             }
         }
     }
@@ -674,6 +760,7 @@ fn cleanup_orphaned_visuals_system(
     visual_hands: Query<(Entity, &VisualHandTile)>,
     visual_kawa: Query<(Entity, &VisualKawaTile)>,
     visual_mentsu: Query<(Entity, &VisualMentsuTile)>,
+    visual_nuki: Query<(Entity, &VisualNukidoraTile)>,
     players_query: Query<&Hand>,
 ) {
     for (visual_entity, visual_tile) in &visual_hands {
@@ -687,6 +774,11 @@ fn cleanup_orphaned_visuals_system(
         }
     }
     for (visual_entity, visual_tile) in &visual_mentsu {
+        if players_query.get(visual_tile.owner).is_err() {
+            commands.entity(visual_entity).despawn();
+        }
+    }
+    for (visual_entity, visual_tile) in &visual_nuki {
         if players_query.get(visual_tile.owner).is_err() {
             commands.entity(visual_entity).despawn();
         }

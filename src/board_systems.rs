@@ -737,25 +737,35 @@ pub fn cleanup_call_options(
         With<DaiminkanOption>, With<DaiminkanDeclared>,
     )>>,
     discard_query: Single<(Entity, &DiscardedTile, &DiscardedBy), With<CurrentDiscard>>,
-    called_check: Query<(), With<DiscardWasCalled>>,
+    was_called_check: Query<(), With<TileWasCalled>>, // Changed this line
     furiten_check: Query<(Entity, &Tenpai)>,
     round_result: Option<Res<RoundResult>>,
     pre_blackout: Option<Res<PreBlackoutState>>,
+    mut kawa_query: Query<(&Kawa, Option<&mut CalledKawaIndices>)>,
     mut commands: Commands,
 ) {
     if pre_blackout.is_none() && round_result.is_none() {
         let (discard_entity, discarded_tile, discarded_by) = *discard_query;
 
-        // apply temp furiten to anyone in tenpai waiting on this tile
+        // apply temp furiten for anyone in tenpai waiting for this tile
         for (player, tenpai) in &furiten_check {
             if tenpai.0.contains(&discarded_tile.0) {
                 commands.entity(player).insert(Furiten);
             }
         }
 
-        if called_check.contains(discarded_by.0) {
-            // despawn after called 
+        // check the tile entity,
+        if was_called_check.contains(discard_entity) {
             commands.entity(discard_entity).despawn();
+
+            if let Ok((kawa, mut called_opt)) = kawa_query.get_mut(discarded_by.0) {
+                let idx = kawa.0.len().saturating_sub(1);
+                if let Some(mut called) = called_opt {
+                    if !called.0.contains(&idx) { called.0.push(idx); }
+                } else {
+                    commands.entity(discarded_by.0).insert(CalledKawaIndices(vec![idx]));
+                }
+            }
         } else {
             commands.entity(discard_entity).remove::<CurrentDiscard>();
         }
@@ -773,6 +783,7 @@ pub fn cleanup_call_options(
             .remove::<DaiminkanDeclared>();
     }
 }
+
 
 
 // refer to ron counterpart
@@ -1271,7 +1282,7 @@ pub fn declare_pon(
     higher_priority: Query<(), With<RonOption>>,
     mut query: Query<(&mut Hand, &mut OpenMentsu)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
-    discarded_by: Single<&DiscardedBy, With<CurrentDiscard>>,
+    discard_query: Single<(Entity, &DiscardedBy), With<CurrentDiscard>>,
     jikaze_query: Query<&Jikaze>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
@@ -1287,6 +1298,7 @@ pub fn declare_pon(
         if let Ok((mut hand, mut open_mentsu)) = query.get_mut(player) {
             lock.0 = true;
             let tile = pon_option.0;
+            let (discard_entity, discarded_by) = *discard_query;
 
             let mut rot_idx = 0;
             if let (Ok(player_wind), Ok(discard_wind)) = (jikaze_query.get(player), jikaze_query.get(discarded_by.0)) {
@@ -1310,6 +1322,8 @@ pub fn declare_pon(
 
             commands.entity(player).remove::<ClosedHand>();
             commands.entity(discarded_by.0).insert(DiscardWasCalled);
+            commands.entity(discarded_by.0).insert(DiscardWasCalled); // for nagashi mangan
+            commands.entity(discard_entity).insert(TileWasCalled);    // for the kawa rendering
             commands.entity(player).insert(ForbiddenDiscard(vec![tile]));
 
             if let Some(ref mut log) = replay_log {
@@ -1357,7 +1371,7 @@ pub fn declare_chi(
     higher_priority: Query<(), Or<(With<RonOption>, With<PonOption>, With<DaiminkanOption>)>>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, &Jikaze)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
-    discarded_by: Single<&DiscardedBy, With<CurrentDiscard>>,
+    discard_query: Single<(Entity, &DiscardedBy), With<CurrentDiscard>>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
@@ -1373,6 +1387,8 @@ pub fn declare_chi(
     }
 
     for (player, chi_option, chi_declared) in declared.iter() {
+        let (discard_entity, discarded_by) = *discard_query;
+
         let is_valid = if let (
             Ok((hand, _, self_jikaze)),
             Ok((_, _, discard_jikaze))
@@ -1449,7 +1465,8 @@ pub fn declare_chi(
             }
 
             commands.entity(player).remove::<ClosedHand>();
-            commands.entity(discarded_by.0).insert(DiscardWasCalled);
+            commands.entity(discarded_by.0).insert(DiscardWasCalled); // for nagashi mangan
+            commands.entity(discard_entity).insert(TileWasCalled);    // for the kawa rendering
             game.calls_made = true;
 
             for ippatsu_player in ippatsu_query.iter() {
@@ -1682,7 +1699,7 @@ pub fn declare_discarded_kan(
     higher_priority: Query<(), With<RonOption>>,
     mut query: Query<(&mut Hand, &mut OpenMentsu)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
-    discarded_by: Single<&DiscardedBy, With<CurrentDiscard>>,
+    discard_query: Single<(Entity, &DiscardedBy), With<CurrentDiscard>>,
     jikaze_query: Query<&Jikaze>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
@@ -1699,6 +1716,7 @@ pub fn declare_discarded_kan(
             lock.0 = true;
             let tile = &daiminkan_option.0;
             let count = can_declare_kan_from_hand(&hand.0, tile);
+            let (discard_entity, discarded_by) = *discard_query;
 
             if count == 3 {
                 let mut rot_idx = 0;
@@ -1711,7 +1729,8 @@ pub fn declare_discarded_kan(
                 hand.0.retain(|x| x != tile);
 
                 commands.entity(player).remove::<ClosedHand>();
-                commands.entity(discarded_by.0).insert(DiscardWasCalled);
+                commands.entity(discarded_by.0).insert(DiscardWasCalled); // for nagashi mangan
+                commands.entity(discard_entity).insert(TileWasCalled);    // for the kawa rendering
 
                 game.pending_kan_dora = true;
                 game.pending_rinshan = true;
@@ -2418,7 +2437,8 @@ pub fn round_cleanup(
         commands.entity(player).remove::<RiichiOption>();
         commands.entity(player).remove::<DoubleRiichi>();
         commands.entity(player).remove::<Ippatsu>();
-        commands.entity(player).remove::<KyuushuOption>();  
+        commands.entity(player).remove::<KyuushuOption>();
+        commands.entity(player).remove::<CalledKawaIndices>();
 
         commands.entity(player).insert(ClosedHand);
     }
