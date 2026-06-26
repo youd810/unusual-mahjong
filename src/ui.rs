@@ -620,7 +620,7 @@ fn apply_debug_hand(
         commands.entity(player).remove::<ClosedHand>();
     }
 
-    wall.tiles.insert(wall.head, draw);
+    wall.tiles[wall.head] = draw;
     current_turn.0 = player;
     next_state.set(TurnState::Draw);
 }

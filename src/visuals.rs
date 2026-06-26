@@ -40,6 +40,12 @@ pub struct VisualMentsuTile {
 #[derive(Component)]
 pub struct VisualWallTile;
 
+
+#[derive(Component)]
+pub struct VisualRiichiStick {
+    pub owner: Entity,
+}
+
 pub struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
@@ -53,6 +59,9 @@ impl Plugin for VisualsPlugin {
                 render_wall_system.run_if(resource_exists::<TileModels>),
                 render_open_mentsu_system.run_if(resource_exists::<TileModels>),
                 cleanup_orphaned_visuals_system,
+                // add these two
+                spawn_riichi_stick_system,
+                cleanup_riichi_sticks_system,
             ));
     }
 }
@@ -245,14 +254,14 @@ fn render_hands_system(
 
 fn render_kawa_system(
     mut commands: Commands,
-    players_query: Query<(Entity, &Kawa, &Seat, Ref<Kawa>)>,
+    players_query: Query<(Entity, &Kawa, &Seat, Ref<Kawa>, Option<&Riichi>)>,
     tile_models: Res<TileModels>,
     existing_kawa_tiles: Query<(Entity, &VisualKawaTile)>,
 ) {
     if tile_models.models.is_empty() { return; }
     let force_redraw = tile_models.is_changed();
 
-    for (player_entity, kawa, seat, ref_kawa) in &players_query {
+    for (player_entity, kawa, seat, ref_kawa, maybe_riichi) in &players_query {
         if force_redraw || ref_kawa.is_changed() {
             for (visual_entity, visual_tile) in &existing_kawa_tiles {
                 if visual_tile.owner == player_entity {
@@ -270,6 +279,8 @@ fn render_kawa_system(
             // facing up, head facing center
             let flat_rotation = seat_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
 
+            // calculate which index is the riichi discard
+            let riichi_index = maybe_riichi.map(|r| kawa.0.len().saturating_sub(1 + r.turns_since as usize));
 
             for (index, tile) in kawa.0.iter().enumerate() {
                 let row_index = index / 6;
@@ -278,21 +289,90 @@ fn render_kawa_system(
                 // kinda center-ish
                 let base_kawa_position = Vec3::new(-0.5, 0.0, 1.0);
 
-                let offset_x = col_index as f32 * spacing_x;
+                let mut offset_x = col_index as f32 * spacing_x;
+
+                // add horizontal spacing for the riichi tile and push subsequent tiles in the row
+                if let Some(r_idx) = riichi_index {
+                    let r_row = r_idx / 6;
+                    let r_col = r_idx % 6;
+                    if row_index == r_row {
+                        if col_index == r_col {
+                            offset_x += spacing_x * 0.15; // shift the riichi tile slightly
+                        } else if col_index > r_col {
+                            offset_x += spacing_x * 0.3; // shift all following tiles in this row
+                        }
+                    }
+                }
+
                 // new row descending
                 let offset_z = row_index as f32 * spacing_z;
 
                 let local_position = base_kawa_position + Vec3::new(offset_x, 0.0, offset_z);
                 let world_position = seat_rotation.mul_vec3(local_position);
 
-                spawn_tile_instance(&mut commands, &tile_models, tile, player_entity, world_position, flat_rotation, tile_scale, false);
+                let is_riichi_tile = Some(index) == riichi_index;
+                let final_rotation = if is_riichi_tile {
+                    flat_rotation * Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)
+                } else {
+                    flat_rotation
+                };
+
+                spawn_tile_instance(&mut commands, &tile_models, tile, player_entity, world_position, final_rotation, tile_scale, false);
             }
         }
     }
 }
 
+
+fn spawn_riichi_stick_system(
+    mut commands: Commands,
+    query: Query<(Entity, &Seat), Added<Riichi>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (player_entity, seat) in &query {
+        let seat_index = seat.0;
+        let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
+
+        let base_position = Vec3::new(0.0, 0.0, 0.7);
+        let world_position = seat_rotation.mul_vec3(base_position);
+
+        // rotate it 90 degrees so it lies horizontally in front of the player
+        let stick_rotation = seat_rotation * Quat::from_rotation_y(std::f32::consts::PI);
+
+        commands.spawn((
+            VisualRiichiStick { owner: player_entity },
+            Mesh3d(meshes.add(Cuboid::new(0.3, 0.02, 0.02))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.9, 0.9, 0.9),
+                ..default()
+            })),
+            Transform {
+                translation: world_position,
+                rotation: stick_rotation,
+                scale: Vec3::ONE,
+            },
+        ));
+    }
+}
+
+fn cleanup_riichi_sticks_system(
+    mut commands: Commands,
+    sticks: Query<(Entity, &VisualRiichiStick)>,
+    players: Query<&Riichi>,
+) {
+    for (stick_entity, stick) in &sticks {
+        // despawn the stick if the riichi component is removed
+        if players.get(stick.owner).is_err() {
+            commands.entity(stick_entity).despawn();
+        }
+    }
+}
+
+
 // TODO: haipai https://www.youtube.com/watch?v=7BNe02MWLg0
 // TODO: Kandora is broken
+// TODO: yama tile to rinshan pile transfer for kan
 pub fn render_wall_system(
     mut commands: Commands,
     wall: Option<Res<crate::resources::Wall>>,
