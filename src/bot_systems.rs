@@ -494,7 +494,7 @@ pub fn bot_call_system(
             let mut temp_hand = hand.0.clone();
             temp_hand.retain(|t| *t != k.0);
             let mut temp_open = open_mentsu.0.clone();
-            temp_open.push(Mentsu::Daiminkan([k.0; 4]));
+            temp_open.push(Mentsu::Daiminkan([k.0; 4], 0));
             candidates.push((score(&temp_hand, &temp_open), 0));
         }
 
@@ -502,7 +502,7 @@ pub fn bot_call_system(
             let mut temp_hand = Hand(hand.0.clone());
             for _ in 0..2 { temp_hand.remove_tile_from_hand(&p.0); }
             let mut temp_open = open_mentsu.0.clone();
-            temp_open.push(Mentsu::Koutsu([p.0; 3], false));
+            temp_open.push(Mentsu::Koutsu([p.0; 3], MentsuState::Open(0)));
             candidates.push((score(&temp_hand.0, &temp_open), 1));
         }
 
@@ -529,7 +529,7 @@ pub fn bot_call_system(
                 temp_hand.remove_tile_from_hand(&first);
                 temp_hand.remove_tile_from_hand(&second);
                 let mut temp_open = open_mentsu.0.clone();
-                temp_open.push(Mentsu::Shuntsu(shuntsu_array, false));
+                temp_open.push(Mentsu::Shuntsu(shuntsu_array, MentsuState::Open(0)));
                 candidates.push((score(&temp_hand.0, &temp_open), 2 + i));
             }
         }

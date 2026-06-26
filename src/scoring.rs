@@ -114,16 +114,16 @@ pub fn calculate_fu(
 
     for mentsu in result.iter() {
         match mentsu {
-            Mentsu::Koutsu(tiles, true) => {
+            Mentsu::Koutsu(tiles, MentsuState::Closed) => {
                 fu += if is_yaochuuhai(&tiles[0]) {8} else {4};
             }
-            Mentsu::Koutsu(tiles, false) => {
+            Mentsu::Koutsu(tiles, MentsuState::Open(_)) => {
                 fu += if is_yaochuuhai(&tiles[0]) {4} else {2};
             }
             Mentsu::Ankan(tiles) => {
                 fu += if is_yaochuuhai(&tiles[0]) {32} else {16};
             }
-            Mentsu::Daiminkan(tiles) | Mentsu::Shouminkan(tiles) => {
+            Mentsu::Daiminkan(tiles, _) | Mentsu::Shouminkan(tiles, _) => {
                 fu += if is_yaochuuhai(&tiles[0]) {16} else {8};
             }
             Mentsu::Jantou(tiles) => {

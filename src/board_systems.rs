@@ -1272,6 +1272,7 @@ pub fn declare_pon(
     mut query: Query<(&mut Hand, &mut OpenMentsu)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
     discarded_by: Single<&DiscardedBy, With<CurrentDiscard>>,
+    jikaze_query: Query<&Jikaze>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
@@ -1279,19 +1280,21 @@ pub fn declare_pon(
     mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands,
 ) {
-    if !undecided.is_empty() || !higher_priority.is_empty() {
-        return;
-    }
-    if lock.0 {
-        return;
-    }
+    if !undecided.is_empty() || !higher_priority.is_empty() { return; }
+    if lock.0 { return; }
 
     for (player, pon_option) in declared.iter() {
         if let Ok((mut hand, mut open_mentsu)) = query.get_mut(player) {
             lock.0 = true;
             let tile = pon_option.0;
 
-            open_mentsu.0.push(Mentsu::Koutsu([tile; 3], false));
+            let mut rot_idx = 0;
+            if let (Ok(player_wind), Ok(discard_wind)) = (jikaze_query.get(player), jikaze_query.get(discarded_by.0)) {
+                let distance = (discard_wind.0.to_num() + 4 - player_wind.0.to_num()) % 4;
+                rot_idx = match distance { 3 => 0, 2 => 1, 1 => 2, _ => 0 };
+            }
+
+            open_mentsu.0.push(Mentsu::Koutsu([tile; 3], MentsuState::Open(rot_idx)));
             println!("{} declares Pon on {:?}", player, tile);
 
             for _ in 0..2 {
@@ -1399,7 +1402,7 @@ pub fn declare_chi(
                     // use the variables as a pointer for removal first b4 moving the value
                     hand.remove_tile_from_hand(&next);
                     hand.remove_tile_from_hand(&prev);
-                    open_mentsu.0.push(Mentsu::Shuntsu([prev, *tile, next], false));
+                    open_mentsu.0.push(Mentsu::Shuntsu([prev, *tile, next], MentsuState::Open(1)));
                     commands.entity(player).insert(ForbiddenDiscard(vec![*tile]));
                 },
                 ChiTilePos::Left => {
@@ -1421,7 +1424,7 @@ pub fn declare_chi(
 
                     hand.remove_tile_from_hand(&next);
                     hand.remove_tile_from_hand(&next_next);
-                    open_mentsu.0.push(Mentsu::Shuntsu([*tile, next, next_next], false));
+                    open_mentsu.0.push(Mentsu::Shuntsu([*tile, next, next_next], MentsuState::Open(0)));
                 },
                 ChiTilePos::Right => {
                     println!("{} declares Chi on {:?} (position: {:?})", player, tile, pos);
@@ -1441,7 +1444,7 @@ pub fn declare_chi(
 
                     hand.remove_tile_from_hand(&prev);
                     hand.remove_tile_from_hand(&prev_prev);
-                    open_mentsu.0.push(Mentsu::Shuntsu([prev_prev, prev, *tile], false));
+                    open_mentsu.0.push(Mentsu::Shuntsu([prev_prev, prev, *tile], MentsuState::Open(2)));
                 },
             }
 
@@ -1476,7 +1479,7 @@ pub fn player_and_total_kan_count(query: &Query<&OpenMentsu>) -> (u8, u8) {
     let mut total_kan = 0;
     for open in query.iter() {
         let kan = open.0.iter()
-            .filter(|mentsu| matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_)))
+            .filter(|mentsu| matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_, _) | Mentsu::Shouminkan(_, _)))
             .count();
 
         if kan > 0 {
@@ -1566,7 +1569,6 @@ pub fn shouminkan_check(
 
 
 // ankan + shouminkan 
-// ankan + shouminkan
 pub fn declare_drawn_kan(
     mut messages: MessageReader<DeclareKanMessage>,
     mut query: Query<(&mut Hand, &mut OpenMentsu, Option<&DrawnTile>)>,
@@ -1607,19 +1609,22 @@ pub fn declare_drawn_kan(
             }
             else {
                 for mentsu in &mut open_mentsu.0 {
-                    if let Mentsu::Koutsu(tiles, false) = mentsu && tiles[0] == *tile {
-                        *mentsu = Mentsu::Shouminkan([*tile; 4]);
-                        hand.0.retain(|x| x != tile);
-                        kan_successful_type = Some(Kantsu::Shouminkan);
-                        game.pending_kan_dora = true;
-                        game.pending_rinshan = true;
-                        commands.spawn((
-                            CurrentDiscard,
-                            DiscardedTile(*tile),
-                            DiscardedBy(message.player),
-                            Chankan,
-                        ));
-                        break;
+                    if let Mentsu::Koutsu(tiles, MentsuState::Open(rot_idx)) = mentsu {
+                        if tiles[0] == *tile {
+                            let r = *rot_idx;
+                            *mentsu = Mentsu::Shouminkan([*tile; 4], r);
+                            hand.0.retain(|x| x != tile);
+                            kan_successful_type = Some(Kantsu::Shouminkan);
+                            game.pending_kan_dora = true;
+                            game.pending_rinshan = true;
+                            commands.spawn((
+                                CurrentDiscard,
+                                DiscardedTile(*tile),
+                                DiscardedBy(message.player),
+                                Chankan,
+                            ));
+                            break;
+                        }
                     }
                 }
             }
@@ -1671,7 +1676,6 @@ pub fn declare_drawn_kan(
 
 
 // daiminkan
-// daiminkan
 pub fn declare_discarded_kan(
     declared: Query<(Entity, &DaiminkanOption), With<DaiminkanDeclared>>,
     undecided: Query<(), (With<DaiminkanOption>, Without<DaiminkanDeclared>)>,
@@ -1679,6 +1683,7 @@ pub fn declare_discarded_kan(
     mut query: Query<(&mut Hand, &mut OpenMentsu)>,
     ippatsu_query: Query<Entity, With<Ippatsu>>,
     discarded_by: Single<&DiscardedBy, With<CurrentDiscard>>,
+    jikaze_query: Query<&Jikaze>,
     mut game: ResMut<GameState>,
     mut current_turn: ResMut<CurrentTurn>,
     mut next_state: ResMut<NextState<TurnState>>,
@@ -1686,22 +1691,23 @@ pub fn declare_discarded_kan(
     mut replay_log: Option<ResMut<ReplayLog>>,
     mut commands: Commands
 ) {
-    if !undecided.is_empty() || !higher_priority.is_empty() {
-        return;
-    }
-    if lock.0 {
-        return;
-    }
+    if !undecided.is_empty() || !higher_priority.is_empty() { return; }
+    if lock.0 { return; }
 
     for (player, daiminkan_option) in declared.iter() {
         if let Ok((mut hand, mut open_mentsu)) = query.get_mut(player) {
             lock.0 = true;
             let tile = &daiminkan_option.0;
-
             let count = can_declare_kan_from_hand(&hand.0, tile);
 
             if count == 3 {
-                open_mentsu.0.push(Mentsu::Daiminkan([*tile; 4]));
+                let mut rot_idx = 0;
+                if let (Ok(p_wind), Ok(d_wind)) = (jikaze_query.get(player), jikaze_query.get(discarded_by.0)) {
+                    let distance = (d_wind.0.to_num() + 4 - p_wind.0.to_num()) % 4;
+                    rot_idx = match distance { 3 => 0, 2 => 1, 1 => 3, _ => 0 };
+                }
+
+                open_mentsu.0.push(Mentsu::Daiminkan([*tile; 4], rot_idx));
                 hand.0.retain(|x| x != tile);
 
                 commands.entity(player).remove::<ClosedHand>();

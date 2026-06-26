@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::gltf::{Gltf, GltfNode, GltfMesh};
 use std::collections::{HashMap, HashSet};
 use crate::components::*;
-use crate::core::{Tile, Honor};
+use crate::core::*;
 use crate::resources::Omniscience;
 
 #[derive(Clone)]
@@ -528,19 +528,74 @@ fn render_open_mentsu_system(
             let flat_rotation = seat_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
 
             for mentsu in open_mentsu.0.iter() {
-                for tile in mentsu.tiles() {
-                    let local_position = Vec3::new(current_offset_x, 0.0, 0.0);
+                let (tiles, rot_idx) = match mentsu {
+                    Mentsu::Jantou(t) => (t.as_slice(), None),
+                    Mentsu::Koutsu(t, MentsuState::Open(idx)) => (t.as_slice(), Some(*idx)),
+                    Mentsu::Koutsu(t, MentsuState::Closed) => (t.as_slice(), None),
+                    Mentsu::Shuntsu(t, MentsuState::Open(idx)) => (t.as_slice(), Some(*idx)),
+                    Mentsu::Shuntsu(t, MentsuState::Closed) => (t.as_slice(), None),
+                    Mentsu::Ankan(t) => (t.as_slice(), None),
+                    Mentsu::Daiminkan(t, idx) => (t.as_slice(), Some(*idx)),
+                    Mentsu::Shouminkan(t, idx) => (t.as_slice(), Some(*idx)),
+                };
+
+                // decouple visual ordering from memory ordering
+                let mut display_items: Vec<(usize, &Tile)> = tiles.iter().enumerate().collect();
+                let mut visual_rot_idx = rot_idx;
+
+                // chi is always from Kamicha, so we force the called tile to the visual left
+                if let Mentsu::Shuntsu(_, MentsuState::Open(idx)) = mentsu {
+                    let called = display_items.remove(*idx);
+                    display_items.insert(0, called);
+                    visual_rot_idx = Some(0);
+                }
+
+                let mut saved_kan_x = 0.0;
+
+                                for (visual_i, (orig_i, tile)) in display_items.into_iter().enumerate() {
+                    let is_added_kan = matches!(mentsu, Mentsu::Shouminkan(..)) && orig_i == 3;
+                    let is_rotated = Some(visual_i) == visual_rot_idx || is_added_kan;
+                    // ankan indicator: outer tiles are face down
+                    let is_face_down = matches!(mentsu, Mentsu::Ankan(_)) && (orig_i == 0 || orig_i == 3);
+
+                    let mut local_x = current_offset_x;
+                    let mut local_y = 0.0;
+
+                    if is_added_kan {
+                        local_x = saved_kan_x;
+                        local_y = 0.14; // stack height
+                    } else if is_rotated {
+                        current_offset_x += spacing_x * 0.15;
+                        local_x = current_offset_x;
+                        saved_kan_x = current_offset_x;
+                    }
+
+                    let local_position = Vec3::new(local_x, local_y, 0.0);
                     let world_position = seat_rotation.mul_vec3(base_position + local_position);
 
-                    spawn_mentsu_instance(&mut commands, &tile_models, tile, player_entity, world_position, flat_rotation, tile_scale);
+                    let tile_rotation = if is_rotated {
+                        flat_rotation * Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)
+                    } else if is_face_down {
+                        flat_rotation * Quat::from_rotation_x(std::f32::consts::PI)
+                    } else {
+                        flat_rotation
+                    };
 
-                    current_offset_x += spacing_x;
+                    spawn_mentsu_instance(&mut commands, &tile_models, tile, player_entity, world_position, tile_rotation, tile_scale);
+
+                    if !is_added_kan {
+                        current_offset_x += spacing_x;
+                        if is_rotated {
+                            current_offset_x += spacing_x * 0.3;
+                        }
+                    }
                 }
                 current_offset_x += 0.1;
             }
         }
     }
 }
+
 
 fn spawn_tile_instance(
     commands: &mut Commands,
