@@ -238,7 +238,6 @@ pub fn info_display_ui_system(
     mut contexts: EguiContexts,
     game: Res<GameState>,
     wall: Res<Wall>,
-    dead_wall: Res<DeadWall>,
     current_turn: Res<CurrentTurn>,
     player_query: Query<(
         Entity, &Points, &Jikaze, &Hand, &Kawa, &OpenMentsu, &NukedTiles,
@@ -259,19 +258,19 @@ pub fn info_display_ui_system(
                 MatchPhase::Nima => "Nima",
             };
             ui.label(format!("{} {:?} {} | Honba: {} | Wall: {}",
-                match_str, game.bakaze, game.rounds, game.honba, wall.0.len()));
+                match_str, game.bakaze, game.rounds, game.honba, wall.remaining_draws()));
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label("Dora:");
-                for indicator in &dead_wall.dora_indicators {
-                    let dora = crate::scoring::get_dora_from_indicator(indicator);
+                for indicator in wall.get_dora_indicators() {
+                    let dora = crate::scoring::get_dora_from_indicator(&indicator);
                     ui.label(format!("{:?}", dora));
                 }
             });
             if omniscience.0 {
                 ui.label("next draws:");
                 ui.horizontal_wrapped(|ui| {
-                    for tile in wall.0.iter().take(5) {
+                    for tile in wall.tiles[wall.head..].iter().take(8) {
                         ui.label(format!("{:?}", tile));
                     }
                 });
@@ -317,14 +316,15 @@ pub fn info_display_ui_system(
                             ui.horizontal_wrapped(|ui| {
                                 ui.label("Naki:");
                                 for mentsu in &open.0 {
-                                    let text = match mentsu {
+                                        let text = match mentsu {
                                         Mentsu::Koutsu(t, _) => format!("Pon{:?}", t),
                                         Mentsu::Shuntsu(t, _) => format!("Chi{:?}", t),
                                         Mentsu::Ankan(t) => format!("Ankan{:?}", &t[..1]),
-                                        Mentsu::Daiminkan(t) => format!("Dkan{:?}", &t[..1]),
-                                        Mentsu::Shouminkan(t) => format!("Skan{:?}", &t[..1]),
+                                        Mentsu::Daiminkan(t, _) => format!("Dkan{:?}", &t[..1]),
+                                        Mentsu::Shouminkan(t, _) => format!("Skan{:?}", &t[..1]),
                                         Mentsu::Jantou(_) => String::new(),
                                     };
+
                                     if !text.is_empty() { ui.label(text); }
                                 }
                             });
@@ -621,7 +621,7 @@ fn apply_debug_hand(
         commands.entity(player).remove::<ClosedHand>();
     }
 
-    wall.0.insert(0, draw);
+    wall.tiles[wall.head] = draw;
     current_turn.0 = player;
     next_state.set(TurnState::Draw);
 }
@@ -893,8 +893,8 @@ pub fn debug_ui_system(
                     Tile::Pin(8), Tile::Pin(8),
                 ];
                 let open = vec![
-                    Mentsu::Koutsu([Tile::Pin(5); 3], false),
-                    Mentsu::Shuntsu([Tile::Man(2), Tile::Man(3), Tile::Man(4)], false),
+                    Mentsu::Koutsu([Tile::Pin(5); 3], MentsuState::Open(1)),
+                    Mentsu::Shuntsu([Tile::Man(2), Tile::Man(3), Tile::Man(4)], MentsuState::Open(1)),
                 ];
                 apply_debug_hand(bot, hand, Tile::Sou(5), open, &mut commands, &mut wall, &mut current_turn, &mut next_state);
             }

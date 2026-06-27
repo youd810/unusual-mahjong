@@ -36,7 +36,7 @@ pub fn tsuuisou(hand: &[Tile]) -> bool {
 
 
 pub fn iipeikou(result: &[Mentsu]) -> bool {
-    let shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, true))).collect();
+    let shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, MentsuState::Closed))).collect();
 
     for i in 0..shuntsu.len() {
         for j in i+1..shuntsu.len() {
@@ -51,7 +51,7 @@ pub fn iipeikou(result: &[Mentsu]) -> bool {
 
 
 pub fn ryanpeikou(result: &[Mentsu]) -> bool {
-    let mut shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, true))).collect();
+    let mut shuntsu: Vec<&Mentsu> = result.iter().filter(|x| matches!(x, Mentsu::Shuntsu(_, MentsuState::Closed))).collect();
 
     if shuntsu.len() == 4 {
         shuntsu.sort();
@@ -69,7 +69,7 @@ pub fn yakuhai(result: &[Mentsu], jikaze: &Wind, bakaze: &Wind) -> u8 {
     result.iter().map(|mentsu| {
         let tile = match mentsu {
             Mentsu::Koutsu(tiles, _) => &tiles[0],
-            Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles) | Mentsu::Shouminkan(tiles) => &tiles[0],
+            Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles, _) | Mentsu::Shouminkan(tiles, _) => &tiles[0],
             _ => return 0,
         };
 
@@ -98,7 +98,7 @@ pub fn sanankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool, thirteen
         .filter(|mentsu| {
             match mentsu {
                 Mentsu::Ankan(_) => true,
-                Mentsu::Koutsu(tiles, true) => {
+                Mentsu::Koutsu(tiles, MentsuState::Closed) => {
                     // compares result with thirteen tiles to see if the winning tile forms the final koutsu and doesn't come from ron 
                     // this check should suffice, or shouldn't it?
                     !(tiles[0] == *winning_tile && !is_tsumo && thirteen_tiles.iter().filter(|x| **x == *winning_tile).count() == 2)
@@ -116,7 +116,7 @@ pub fn suuankou(result: &[Mentsu], winning_tile: &Tile, is_tsumo: bool) -> bool 
         .filter(|mentsu| {
             match mentsu {
                 Mentsu::Ankan(_) => true, 
-                Mentsu::Koutsu(tiles, true) => {
+                Mentsu::Koutsu(tiles, MentsuState::Closed) => {
                     tiles[0] != *winning_tile || is_tsumo
                 }
                 _ => false,
@@ -130,7 +130,7 @@ pub fn toitoi(result: &[Mentsu]) -> bool {
     result
         .iter()
         .filter(|mentsu| 
-            matches!(mentsu, Mentsu::Koutsu(_, _) | Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_)))
+            matches!(mentsu, Mentsu::Koutsu(_, _) | Mentsu::Ankan(_) | Mentsu::Daiminkan(_, _) | Mentsu::Shouminkan(_, _)))
         .count() == 4 
 }
 
@@ -199,7 +199,7 @@ pub fn chanta(result: &[Mentsu]) -> bool {
             }
             Mentsu::Koutsu(tiles, _) => is_yaochuuhai(&tiles[0]),
             Mentsu::Jantou(tiles) => is_yaochuuhai(&tiles[0]),
-            Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles) | Mentsu::Shouminkan(tiles) => {
+            Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles, _) | Mentsu::Shouminkan(tiles, _) => {
                 is_yaochuuhai(&tiles[0])
             }
         }
@@ -215,7 +215,7 @@ pub fn junchan(result: &[Mentsu]) -> bool {
             }
             Mentsu::Koutsu(tiles, _) => is_terminal(&tiles[0]),
             Mentsu::Jantou(tiles) => is_terminal(&tiles[0]),
-            Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles) | Mentsu::Shouminkan(tiles) => {
+            Mentsu::Ankan(tiles) | Mentsu::Daiminkan(tiles, _) | Mentsu::Shouminkan(tiles, _) => {
                 is_terminal(&tiles[0])
             }
         }
@@ -225,19 +225,19 @@ pub fn junchan(result: &[Mentsu]) -> bool {
 
 pub fn ryankantsu(open_mentsu: &[Mentsu]) -> bool {
     open_mentsu.iter().filter(|mentsu|
-        matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_))).count() == 2 
+        matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_, _) | Mentsu::Shouminkan(_, _))).count() == 2 
 }
 
 
 pub fn sankantsu(open_mentsu: &[Mentsu]) -> bool {
     open_mentsu.iter().filter(|mentsu|
-        matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_))).count() == 3 
+        matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_, _) | Mentsu::Shouminkan(_, _))).count() == 3 
 }
 
 
 pub fn suukantsu(open_mentsu: &[Mentsu]) -> bool {
     open_mentsu.iter().filter(|mentsu|
-        matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_) | Mentsu::Shouminkan(_))).count() == 4 
+        matches!(mentsu, Mentsu::Ankan(_) | Mentsu::Daiminkan(_, _) | Mentsu::Shouminkan(_, _))).count() == 4 
 }
 
 
@@ -337,7 +337,7 @@ pub fn pinfu(result: &[Mentsu], winning_tile: &Tile, jikaze: &Wind, bakaze: &Win
     for mentsu in result {
         
         match mentsu {
-            Mentsu::Shuntsu(tiles, true) => {
+            Mentsu::Shuntsu(tiles, MentsuState::Closed) => {
                 shuntsu_count += 1;
                 // ? this is right there's no way this is wrong please tell me this is enough
                 // https://riichi.wiki/Pinfu
@@ -362,11 +362,11 @@ pub fn pinfu(result: &[Mentsu], winning_tile: &Tile, jikaze: &Wind, bakaze: &Win
 
 
 pub fn haitei(wall: &Wall, is_tsumo: bool) -> bool {
-    wall.0.is_empty() && is_tsumo
+    wall.remaining_draws() == 0 && is_tsumo
 }
 
 pub fn houtei(wall: &Wall, is_tsumo: bool) -> bool {
-    wall.0.is_empty() && !is_tsumo
+    wall.remaining_draws() == 0 && !is_tsumo
 }
 
 pub fn tenhou(kawa: &Kawa, is_oya: bool, is_tsumo: bool, calls_made: bool) -> bool {

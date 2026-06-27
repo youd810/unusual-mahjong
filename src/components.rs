@@ -114,6 +114,10 @@ pub struct BotAccusationIntent {
 #[derive(Component)]
 pub struct Jikaze(pub Wind);
 
+// physical seat
+#[derive(Component)]
+pub struct Seat(pub u8);
+
 #[derive(Component)]
 pub struct Points(pub i32);
 
@@ -162,8 +166,14 @@ pub struct Alive;
 #[derive(Component)]
 pub struct Kawa(pub Vec<Tile>);
 
+#[derive(Component, Default)]
+pub struct CalledKawaIndices(pub Vec<usize>);
+
+#[derive(Component)]
+pub struct TileWasCalled;
+
 // ! a component to an entity (each tile is its own entity)
-#[derive(Component)] 
+#[derive(Component, Clone)] 
 pub struct DiscardedTile(pub Tile);
 
 #[derive(Component)]

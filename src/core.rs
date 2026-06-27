@@ -33,14 +33,20 @@ pub enum Honor {
     South,
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug, PartialOrd, Ord)]
+pub enum MentsuState {
+    Closed,
+    Open(usize),
+}
+
 #[derive(PartialEq, Eq, Clone, Copy, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Mentsu {
     Jantou([Tile; 2]),
-    Koutsu([Tile; 3], bool), // true = closed
-    Shuntsu([Tile; 3], bool),
+    Koutsu([Tile; 3], MentsuState),
+    Shuntsu([Tile; 3], MentsuState),
     Ankan([Tile; 4]),
-    Daiminkan([Tile; 4]),
-    Shouminkan([Tile; 4]),
+    Daiminkan([Tile; 4], usize),
+    Shouminkan([Tile; 4], usize),
 }
 
 impl Mentsu {
@@ -48,7 +54,7 @@ impl Mentsu {
         match self {
             Mentsu::Jantou(t) => t,
             Mentsu::Koutsu(t, _) | Mentsu::Shuntsu(t, _) => t,
-            Mentsu::Ankan(t) | Mentsu::Daiminkan(t) | Mentsu::Shouminkan(t) => t,
+            Mentsu::Ankan(t) | Mentsu::Daiminkan(t, _) | Mentsu::Shouminkan(t, _) => t,
         }
     }
 }
@@ -179,7 +185,7 @@ pub fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<V
 
     // koutsu check
     if remaining.len() >= 3 && remaining[0] == remaining[1] && remaining[0] == remaining[2] {
-        let koutsu_group = Mentsu::Koutsu([remaining[0], remaining[1], remaining[2]], true);
+        let koutsu_group = Mentsu::Koutsu([remaining[0], remaining[1], remaining[2]], MentsuState::Closed);
         let mut new_remaining = remaining.to_owned();
         for _ in 0..3 {
             new_remaining.remove(0);
@@ -190,14 +196,14 @@ pub fn find_mentsu(remaining: &[Tile], current: Vec<Mentsu>, results: &mut Vec<V
     }
 
     // shuntsu check
-    if let Some(second) = next_tile_sequence(&remaining[0]) 
+    if let Some(second) = next_tile_sequence(&remaining[0])
         && let Some(third) = next_tile_sequence(&second)
         && let Some(second_seq) = remaining.iter().skip(1).position(|x| *x == second).map(|i| i + 1)
         && let Some(third_seq) = remaining.iter().skip(second_seq + 1).position(|x| *x == third).map(|i| i + second_seq + 1) {
-            let shuntsu_group = Mentsu::Shuntsu([remaining[0], remaining[second_seq], remaining[third_seq]], true);
+            let shuntsu_group = Mentsu::Shuntsu([remaining[0], remaining[second_seq], remaining[third_seq]], MentsuState::Closed);
             let mut new_remaining = remaining.to_owned();
             // starts from the highest index
-            for idx in [third_seq, second_seq, 0] {
+            for idx in[third_seq, second_seq, 0] {
                 new_remaining.remove(idx);
                 }
             let mut new_current = current.clone();
@@ -723,8 +729,8 @@ pub fn has_koutsu_or_kan(result: &[Mentsu], first_tile: Tile) -> bool{
         match mentsu {
             Mentsu::Koutsu(tiles, _) => tiles[0] == first_tile,
             Mentsu::Ankan(tiles) 
-            | Mentsu::Daiminkan(tiles)
-            | Mentsu::Shouminkan(tiles) => tiles[0] == first_tile,
+            | Mentsu::Daiminkan(tiles, _)
+            | Mentsu::Shouminkan(tiles, _) => tiles[0] == first_tile,
             _ => false
         }
     })
@@ -774,10 +780,10 @@ pub fn can_declare_kan_from_hand(hand: &[Tile], tile: &Tile) -> u8 {
 
 pub fn can_declare_kan_from_pon(open_mentsu: &[Mentsu], tile: &Tile) -> bool{
     open_mentsu.iter().any(|mentsu| {
-        if let Mentsu::Koutsu(tiles, false) = mentsu && tiles[0] == *tile {
+        if let Mentsu::Koutsu(tiles, MentsuState::Open(_)) = mentsu && tiles[0] == *tile {
             true
         } else {false}
-    }) 
+    })
 }
 
 
@@ -818,7 +824,6 @@ pub fn can_declare_ron(
     bakaze: &Wind,
     jikaze: &Wind,
     wall: &Wall,
-    dead_wall: &DeadWall,
     is_chankan: bool,
     calls_made: bool,
     has_temp_furiten: bool,
@@ -863,7 +868,6 @@ pub fn can_declare_ron(
         false, // ron can't be rinshan
         is_chankan,
         wall,
-        dead_wall,
         calls_made,
         nuked_tiles
     );
@@ -892,7 +896,6 @@ pub fn can_declare_tsumo(
     bakaze: &Wind,
     jikaze: &Wind,
     wall: &Wall,
-    dead_wall: &DeadWall,
     is_rinshan: bool,
     calls_made: bool,
 ) -> Option<HandResult> {
@@ -936,7 +939,6 @@ pub fn can_declare_tsumo(
         is_rinshan,
         false, // tsumo can't chankan 
         wall,
-        dead_wall,
         calls_made,
         nuked_tiles
     );
@@ -963,7 +965,6 @@ pub fn best_potential_result(
     bakaze: &Wind,
     jikaze: &Wind,
     wall: &Wall,
-    dead_wall: &DeadWall,
     calls_made: bool,
     visible_tiles: &[u8; 34],
 ) -> Option<HandResult> {
@@ -986,7 +987,7 @@ pub fn best_potential_result(
                 tile, hand, open_mentsu, nuked_tiles, tenpai,
                 is_closed, is_oya, kawa,
                 is_riichi, is_double_riichi, is_ippatsu,
-                bakaze, jikaze, wall, dead_wall,
+                bakaze, jikaze, wall,
                 false, calls_made,
             )
             && best.as_ref().is_none_or(|b| is_better(&result, b)) {
@@ -1031,7 +1032,7 @@ pub fn best_potential_result(
                         wait, &after_discard, open_mentsu, nuked_tiles, &temp_tenpai,
                         is_closed, is_oya, kawa,
                         is_riichi, is_double_riichi, is_ippatsu,
-                        bakaze, jikaze, wall, dead_wall,
+                        bakaze, jikaze, wall,
                         false, calls_made,
                     )
                     && best.as_ref().is_none_or(|b| is_better(&result, b)) {
@@ -1061,7 +1062,6 @@ pub fn build_loser_tilt_info(
     is_ippatsu: bool,
     bakaze: &Wind,
     wall: &Wall,
-    dead_wall: &DeadWall,
     calls_made: bool,
     visible_tiles: &[u8; 34],
 ) -> LoserTiltInfo {
@@ -1069,7 +1069,7 @@ pub fn build_loser_tilt_info(
         &hand.0, &open_mentsu.0, &nuked_tiles.0, tenpai,
         is_closed, is_oya, kawa,
         is_riichi, is_double_riichi, is_ippatsu,
-        bakaze, &jikaze.0, wall, dead_wall,
+        bakaze, &jikaze.0, wall,
         calls_made, visible_tiles,
     );
 
