@@ -715,14 +715,22 @@ pub fn bot_main_phase_system(
 pub fn bot_cheat_decision_system(
     query: Query<(Entity, &BotProfile), Without<HumanPlayer>>,
     timer: Res<BlackoutTimer>,
+    game: Res<GameState>,
     mut commands: Commands,
 ) {
     let duration = timer.0.duration().as_secs_f32();
     let mut rng = rand::rng();
 
+    // scale to the number of players (lower)
+    let phase_multiplier = match game.match_phase {
+        MatchPhase::Yonma => 1.0,
+        MatchPhase::Sanma => 0.3,
+        MatchPhase::Nima => 0.0, // cheating is completely disable in nima for bots
+    };
+
     if duration >= 2.0 {
         for (entity, profile) in &query {
-            let probability = profile.cheat_tendency * (duration / 5.0);
+            let probability = profile.cheat_tendency * (duration / 5.0) * phase_multiplier;
 
             if rng.random::<f32>() < probability {
                 let execute_at = rng.random_range(1.0..=duration);
@@ -872,7 +880,10 @@ pub fn bot_accusation_decision_system(
     let death_risk = 1.0 / (7 - revolver.chamber) as f32;
 
     for (bot_entity, profile, bot_jikaze) in &query {
-        
+        let effective_aggressiveness = (profile.aggressiveness * profile.composure)
+            .max(profile.aggressiveness - 0.2)
+            .max(0.2);
+
         let mut detected_tampering: Vec<Entity> = vec![];
 
         // scan kawa
@@ -889,36 +900,99 @@ pub fn bot_accusation_decision_system(
 
             if !can_remember { continue; }
 
-            if let Some((_, current_kawa, _)) = kawa_query.iter().find(|(e, _, _)| *e == *snap_entity) 
+            // detection accuracy scales with read instead of being binary
+            let detection_chance = 0.2 + profile.read * 0.8;
+
+            if let Some((_, current_kawa, _)) = kawa_query.iter().find(|(entity, _, _)| *entity == *snap_entity)
             && current_kawa.0.len() == snap_kawa.len()
-            && current_kawa.0.iter().zip(snap_kawa.iter()).any(|(a, b)| a != b) {
+            && current_kawa.0.iter().zip(snap_kawa.iter()).any(|(current, snapshot)| current != snapshot)
+            && rng.random::<f32>() < detection_chance {
                 detected_tampering.push(*snap_entity);
             }
-    
         }
 
-        if detected_tampering.is_empty() { continue; }
+        // aggressive bots may accuse without evidence
+        if detected_tampering.is_empty() {
+            let paranoia_chance = effective_aggressiveness * 0.15;
+            if rng.random::<f32>() >= paranoia_chance {
+                continue;
+            }
 
-        // weigh read to get confidence
-        // TODO: confidence needs to be lowered a bit
-        let (suspect, confidence) = if rng.random::<f32>() < profile.read {
-            let suspect = cheat_log.0.iter()
-                .find(|e| detected_tampering.contains(&e.target_kawa))
-                .map(|e| e.cheater);
-            (suspect, 0.8) // prev: 0.9
-        } else {
             let others: Vec<Entity> = all_alive.iter()
-                .filter(|(e, _)| *e != bot_entity)
-                .map(|(e, _)| e)
+                .filter(|(entity, _)| *entity != bot_entity)
+                .map(|(entity, _)| entity)
                 .collect();
-            (others.choose(&mut rng).copied(), 0.5)
+            let Some(&suspect) = others.choose(&mut rng) else { continue };
+
+            let confidence = 0.3 * effective_aggressiveness;
+            let willingness = effective_aggressiveness * confidence;
+            if willingness <= death_risk { continue; }
+
+            let duration = timer.0.duration().as_secs_f32();
+            let accuse_at = rng.random_range(0.5..=(duration - 0.5).max(0.5));
+
+            commands.entity(bot_entity).insert(BotAccusationIntent {
+                suspect,
+                confidence,
+                accuse_at,
+            });
+
+            println!("Bot {:?} paranoia-accuses {:?} at {:.1}s (conf {:.2})",
+                bot_entity, suspect, accuse_at, confidence);
+            continue;
+        }
+
+        // identification phase; bias towards correct guess
+        let others: Vec<Entity> = all_alive.iter()
+            .filter(|(entity, _)| *entity != bot_entity)
+            .map(|(entity, _)| entity)
+            .collect();
+
+        if others.is_empty() { continue; }
+
+        let cheat_log_suspect = cheat_log.0.iter()
+            .find(|entry| detected_tampering.contains(&entry.target_kawa))
+            .map(|entry| entry.cheater);
+
+        // build weighted suspect pool
+        // quadratic read scaling for correct suspect, diminishing noise for wrong suspects
+        let base_weight = 1.0 - profile.read * 0.5;
+        let correct_bonus = profile.read * profile.read * 5.0;
+
+        let weights: Vec<(Entity, f32)> = others.iter()
+            .map(|&entity| {
+                let weight = if cheat_log_suspect == Some(entity) {
+                    base_weight + correct_bonus
+                } else {
+                    base_weight
+                };
+                (entity, weight)
+            })
+            .collect();
+
+        let total_weight: f32 = weights.iter().map(|(_, weight)| *weight).sum();
+        let mut roll = rng.random::<f32>() * total_weight;
+
+        let mut suspect = others[0];
+        for (entity, weight) in &weights {
+            roll -= weight;
+            if roll <= 0.0 {
+                suspect = *entity;
+                break;
+            }
+        }
+
+        // confidence spread widened
+        let confidence = if cheat_log_suspect == Some(suspect) {
+            0.3 + profile.read * 0.5
+        } else {
+            0.2 + effective_aggressiveness * 0.1
         };
 
-        let Some(suspect) = suspect else { continue };
         if suspect == bot_entity { continue; }
 
-        // willingness check
-        let willingness = profile.aggressiveness * confidence;
+        // willingness scales with effective_aggressiveness instead of raw
+        let willingness = effective_aggressiveness * confidence;
         if willingness <= death_risk { continue; }
 
         let duration = timer.0.duration().as_secs_f32();
@@ -934,6 +1008,7 @@ pub fn bot_accusation_decision_system(
             bot_entity, suspect, accuse_at, confidence);
     }
 }
+
 
 
 pub fn bot_accusation_execution_system(

@@ -1,4 +1,5 @@
 use bevy::prelude::Entity;
+use serde::{Serialize, Deserialize};
 
 use crate::components::*;
 use crate::yaku::*;
@@ -6,14 +7,14 @@ use crate::scoring::*;
 use crate::resources::*;
 use crate::messages::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatchPhase {
-    Yonma, // 4 players
-    Sanma, // 3
-    Nima,  // 2
+    Yonma, // 4 players 
+    Sanma, // 3 
+    Nima, // 2 
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum Tile {
     Man(u8),
     Pin(u8),
@@ -21,7 +22,7 @@ pub enum Tile {
     Honor(Honor),
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum Honor {
     White,
     Red,
@@ -38,7 +39,7 @@ pub enum MentsuState {
     Open(usize),
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Clone, Copy, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Mentsu {
     Jantou([Tile; 2]),
     Koutsu([Tile; 3], MentsuState),
@@ -58,13 +59,13 @@ impl Mentsu {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum Kantsu { // drawn kan only
     Ankan,
     Shouminkan,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum Wind {
     East,
     South,
@@ -125,11 +126,11 @@ impl Wind {
 }
 
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum ChiTilePos { // tile discarded
-    Left,  
-    Middle, 
-    Right,  
+    Left,
+    Middle,
+    Right,
 }
 
 pub fn all_tiles() -> Vec<Tile> {

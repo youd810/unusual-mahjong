@@ -1,9 +1,11 @@
+use bevy::prelude::*;
+use serde::{Serialize, Deserialize};
 use crate::core::*;
 use crate::resources::*;
 use crate::yaku::*;
 use crate::components::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandResult {
     pub yaku_names: Vec<String>,
     pub dora_count: u8,
