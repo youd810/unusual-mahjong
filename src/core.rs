@@ -33,7 +33,7 @@ pub enum Honor {
     South,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum MentsuState {
     Closed,
     Open(usize),
