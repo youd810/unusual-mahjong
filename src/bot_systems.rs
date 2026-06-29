@@ -20,7 +20,8 @@ pub fn setup_bot_think_timer(
 
     if !is_human {
         // randomly waits between 1 and 2.5 seconds
-        let duration = rand::rng().random_range(1.0..=2.5);
+        // ! changed to instant for testing
+        let duration = rand::rng().random_range(0.1..=0.15);
         commands.insert_resource(BotThinkTimer(Timer::from_seconds(duration, TimerMode::Once)));
     }
 }

@@ -552,24 +552,21 @@ pub fn render_wall_system(
     }
 
     let tile_scale = 0.015;
-    let stack_spacing = 0.19; 
+    let stack_spacing = 0.19;
     let tile_height = 0.14;
     let wall_radius = 1.9;
 
-    let base_idx = wall.tiles.len() - 14 + wall.rinshan_max;
+    // The index where the Dead Wall begins logically
+    let dead_wall_base_idx = wall.tiles.len() - 14;
 
     for index in 0..wall.tiles.len() {
         // 1. Skip standard drawn tiles
         if index < wall.head { continue; }
 
-        // 2. Skip drawn rinshan tiles (matches the backwards array mapping)
+        // 2. Skip drawn rinshan tiles (matches exact logical indices)
         let mut was_rinshan_drawn = false;
         for r in 0..wall.rinshan_draws {
-            let stack_offset = r / 2;
-            let is_bot = r % 2 != 0;
-            let base_stack_idx = wall.tiles.len() - 2 - (stack_offset * 2);
-            let rinshan_idx = base_stack_idx + if is_bot { 1 } else { 0 };
-
+            let rinshan_idx = dead_wall_base_idx + r;
             if index == rinshan_idx {
                 was_rinshan_drawn = true;
                 break;
@@ -577,8 +574,14 @@ pub fn render_wall_system(
         }
         if was_rinshan_drawn { continue; }
 
-        // 3. Native logical mapping (0 is the first draw, 67 is the Rinshan stack)
-        let logical_stack = index / 2;
+        // 3. Logical mapping (remap Dead Wall so it physically sits at the end of the loop)
+        let logical_stack = if index >= dead_wall_base_idx {
+            // Reverses the order so index 122 (Rinshan) is at physical stack 67 (closest to the break)
+            let offset = (index - dead_wall_base_idx) / 2;
+            67 - offset
+        } else {
+            index / 2
+        };
         let is_bottom = index % 2 != 0;
 
         // 4. Calculate where the table breaks based on dice roll
@@ -612,11 +615,11 @@ pub fn render_wall_system(
         let local_position = Vec3::new(local_x, local_y, local_z);
         let world_position = side_rotation.mul_vec3(local_position);
 
-        // 8. Dora indicator check
+        // 8. Dora indicator check (matches exact logical indices)
         let mut is_dora = false;
-        let rinshan_stacks = wall.rinshan_max / 2;
+        let base_dora_idx = dead_wall_base_idx + wall.rinshan_max;
         for i in 0..wall.dora_count {
-            let dora_idx = wall.tiles.len() - 2 - (rinshan_stacks + i) * 2;
+            let dora_idx = base_dora_idx + (i * 2);
             if index == dora_idx {
                 is_dora = true;
                 break;
@@ -659,23 +662,18 @@ pub fn render_wall_system(
 }
 
 
-fn render_open_mentsu_system(
+pub fn render_open_mentsu_system(
     mut commands: Commands,
     players_query: Query<(Entity, &OpenMentsu, &Seat, Ref<OpenMentsu>)>,
     tile_models: Res<TileModels>,
-    existing_mentsu_tiles: Query<(Entity, &VisualMentsuTile)>,
+    mut existing_slots: Query<(Entity, &mut TileSlot, &Transform)>,
+    mut busy: ResMut<AnimationBusy>,
 ) {
     if tile_models.models.is_empty() { return; }
     let force_redraw = tile_models.is_changed();
 
     for (player_entity, open_mentsu, seat, ref_mentsu) in &players_query {
         if force_redraw || ref_mentsu.is_changed() {
-            for (visual_entity, visual_tile) in &existing_mentsu_tiles {
-                if visual_tile.owner == player_entity {
-                    commands.entity(visual_entity).despawn();
-                }
-            }
-
             let seat_index = seat.0;
             let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
 
@@ -686,6 +684,9 @@ fn render_open_mentsu_system(
             let base_position = Vec3::new(0.0, 0.0, 3.2);
 
             let flat_rotation = seat_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+
+            let mut visual_index = 0;
+            let mut claimed_entities = std::collections::HashSet::new();
 
             for mentsu in open_mentsu.0.iter() {
                 let (tiles, rot_idx) = match mentsu {
@@ -731,9 +732,9 @@ fn render_open_mentsu_system(
 
                     // Y remains 0.0 so it rests flat, Z controls depth
                     let local_position = Vec3::new(local_x, 0.0, local_z);
-                    let world_position = seat_rotation.mul_vec3(base_position + local_position);
+                    let target_position = seat_rotation.mul_vec3(base_position + local_position);
 
-                    let tile_rotation = if is_rotated {
+                    let target_rotation = if is_rotated {
                         flat_rotation * Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)
                     } else if is_face_down {
                         flat_rotation * Quat::from_rotation_x(std::f32::consts::PI)
@@ -741,7 +742,73 @@ fn render_open_mentsu_system(
                         flat_rotation
                     };
 
-                    spawn_mentsu_instance(&mut commands, &tile_models, tile, player_entity, world_position, tile_rotation, tile_scale);
+                    let target_transform = Transform::from_translation(target_position).with_rotation(target_rotation);
+
+                    // --- STEAL & ANIMATION LOGIC ---
+                    let mut matched_entity = None;
+
+                    // 1. Try to find the exact Mentsu tile already placed (so it doesn't reset)
+                    for (vis_entity, vis_slot, _) in existing_slots.iter() {
+                        if vis_slot.owner == player_entity
+                            && vis_slot.zone == TileZone::OpenMentsu
+                            && vis_slot.index == visual_index
+                        {
+                            matched_entity = Some(vis_entity);
+                            break;
+                        }
+                    }
+
+                    // 2. If missing, figure out where to steal it from
+                    if matched_entity.is_none() {
+                        let is_called_tile = match mentsu {
+                            Mentsu::Ankan(_) | Mentsu::Shouminkan(_, _) => false,
+                            Mentsu::Shuntsu(_, MentsuState::Open(_)) => visual_i == 0,
+                            Mentsu::Koutsu(_, MentsuState::Open(idx)) => orig_i == *idx,
+                            Mentsu::Daiminkan(_, idx) => orig_i == *idx,
+                            _ => false,
+                        };
+
+                        // The called tile comes from the table, the rest come from the hand
+                        let expected_zone = if is_called_tile { TileZone::Kawa } else { TileZone::Hand };
+
+                        for (vis_entity, vis_slot, _) in existing_slots.iter() {
+                            if vis_slot.zone == expected_zone
+                                && vis_slot.tile == *tile
+                                && !claimed_entities.contains(&vis_entity)
+                            {
+                                // For hand tiles, ensure it belongs to THIS player.
+                                // For kawa tiles, it can belong to anyone.
+                                if expected_zone == TileZone::Kawa || vis_slot.owner == player_entity {
+                                    matched_entity = Some(vis_entity);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(vis_ent) = matched_entity {
+                        claimed_entities.insert(vis_ent);
+                        if let Ok((_, mut slot, _)) = existing_slots.get_mut(vis_ent) {
+                            slot.owner = player_entity; // Take ownership if stolen from another player's Kawa
+                            slot.zone = TileZone::OpenMentsu;
+                            slot.index = visual_index;
+                        }
+                        commands.entity(vis_ent).insert(AnimateTo {
+                            target_transform,
+                            speed: 15.0, // Make calls slightly snappier
+                        });
+                        busy.0 += 1;
+                    } else {
+                        // Fallback spawn (e.g. at the very start of the match if loading from a save)
+                        let spawn_pos = target_position + Vec3::new(0.0, 1.0, 0.0);
+                        if let Some(new_ent) = spawn_tile_instance(
+                            &mut commands, &tile_models, tile, player_entity,
+                            TileZone::OpenMentsu, visual_index, spawn_pos, target_rotation, tile_scale
+                        ) {
+                            commands.entity(new_ent).insert(AnimateTo { target_transform, speed: 10.0 });
+                            busy.0 += 1;
+                        }
+                    }
 
                     if !is_added_kan {
                         current_offset_x += spacing_x;
@@ -749,8 +816,19 @@ fn render_open_mentsu_system(
                             current_offset_x += spacing_x * 0.3;
                         }
                     }
+                    visual_index += 1;
                 }
                 current_offset_x += 0.1;
+            }
+
+            // Cleanup orphaned OpenMentsu tiles
+            for (vis_entity, vis_slot, _) in existing_slots.iter() {
+                if vis_slot.owner == player_entity
+                    && vis_slot.zone == TileZone::OpenMentsu
+                    && !claimed_entities.contains(&vis_entity)
+                {
+                    commands.entity(vis_entity).despawn();
+                }
             }
         }
     }
