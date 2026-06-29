@@ -14,7 +14,6 @@ use rand::{RngExt, seq::SliceRandom};
 use std::collections::HashMap;
 use std::fs;
 
-
 pub fn blackout_check_system(
     time: Res<Time>,
     mut timer: ResMut<BlackoutCheckTimer>,
@@ -2094,8 +2093,8 @@ pub fn discard_tile(
                 CurrentDiscard,
                 DiscardedTile(final_discard),
                 DiscardedBy(message.player),
+                IsTsumogiri(message.is_tsumogiri || is_riichi),
             ));
-
             if let Some(mut riichi) = maybe_riichi {
                 if riichi.turns_since > 0 {
                     commands.entity(message.player).remove::<Ippatsu>();
@@ -2169,7 +2168,11 @@ pub fn auto_advance_call_window(
     result: Option<Res<RoundResult>>,
     lock: Res<CallLock>,
     game: Res<GameState>,
+    busy: Res<AnimationBusy>,
 ) {
+    // wait for the discard animation (or any other animation) to finish
+    if busy.0 > 0 { return; }
+
     // wait for human input
     if !human_options.is_empty() || lock.0 || result.is_some() {
         return;

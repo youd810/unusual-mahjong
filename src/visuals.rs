@@ -3,7 +3,7 @@ use bevy::gltf::{Gltf, GltfNode, GltfMesh};
 use std::collections::{HashMap, HashSet};
 use crate::components::*;
 use crate::core::*;
-use crate::resources::Omniscience;
+use crate::resources::*;
 
 #[derive(Clone)]
 pub struct TilePart {
@@ -57,10 +57,15 @@ impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TileModels>()
             .add_systems(Startup, (setup_camera_and_light, start_loading_gltf))
-            .add_systems(Update, (
+            .add_systems(PostUpdate, (
                 check_gltf_loaded,
-                render_hands_system.run_if(resource_exists::<TileModels>),
-                render_kawa_system.run_if(resource_exists::<TileModels>),
+                process_animations_system,
+                (
+                    render_kawa_system,
+                    render_hands_system,
+                    sync_animation_busy_system, // locked in at the end of the chain
+                ).chain().run_if(resource_exists::<TileModels>),
+
                 render_wall_system.run_if(resource_exists::<TileModels>),
                 render_open_mentsu_system.run_if(resource_exists::<TileModels>),
                 render_nukidora_system.run_if(resource_exists::<TileModels>),
@@ -190,12 +195,13 @@ fn get_tile_model_name(tile: &Tile) -> String {
     }
 }
 
-fn render_hands_system(
+pub fn render_hands_system(
     mut commands: Commands,
     players_query: Query<(Entity, &Hand, &Seat, Option<&DrawnTile>, Has<HumanPlayer>, Ref<Hand>, Option<Ref<DrawnTile>>)>,
     omniscience: Res<Omniscience>,
     tile_models: Res<TileModels>,
-    existing_visual_tiles: Query<(Entity, &VisualHandTile)>,
+    mut existing_slots: Query<(Entity, &mut TileSlot, &Transform)>,
+    mut busy: ResMut<AnimationBusy>,
 ) {
     if tile_models.models.is_empty() { return; }
     let force_redraw = tile_models.is_changed();
@@ -205,12 +211,6 @@ fn render_hands_system(
         let drawn_changed = maybe_ref_drawn.map(|reference| reference.is_changed()).unwrap_or(false);
 
         if force_redraw || hand_changed || drawn_changed {
-            for (visual_entity, visual_tile) in &existing_visual_tiles {
-                if visual_tile.owner == player_entity {
-                    commands.entity(visual_entity).despawn();
-                }
-            }
-
             let seat_index = seat.0;
             let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
 
@@ -218,39 +218,91 @@ fn render_hands_system(
             let tile_scale = 0.015;
             let total_tiles = hand.0.len() + if maybe_drawn.is_some() { 1 } else { 0 };
             let hand_width = (total_tiles as f32 - 1.0) * spacing_x;
-
             let local_start_x = -hand_width / 2.0;
             let base_hand_position = Vec3::new(0.0, 0.0, 3.2);
 
-            // base mesh is already standing up
+            // Combine logical hand and drawn tile into one list for target calculation
+            let mut logical_target_slots = Vec::new();
             for (index, tile) in hand.0.iter().enumerate() {
-                let offset_x = local_start_x + (index as f32 * spacing_x);
-                let local_position = Vec3::new(offset_x, 0.0, 0.0);
-                let world_position = seat_rotation.mul_vec3(base_hand_position + local_position);
-
-                let final_rotation = if !is_human && omniscience.0 {
-                    // tiles facing inwards
-                    seat_rotation * Quat::from_rotation_y(std::f32::consts::PI)
-                } else {
-                    // tiles facing outwards
-                    seat_rotation
-                };
-
-                spawn_tile_instance(&mut commands, &tile_models, tile, player_entity, world_position, final_rotation, tile_scale, true);
+                logical_target_slots.push((index, tile, false)); // false = not drawn
+            }
+            if let Some(drawn) = maybe_drawn {
+                logical_target_slots.push((hand.0.len(), &drawn.0, true)); // true = drawn
             }
 
-            if let Some(drawn) = maybe_drawn {
-                let offset_x = (local_start_x + (hand.0.len() as f32 * spacing_x)) + 0.12;
-                let local_position = Vec3::new(offset_x, 0.0, 0.0);
-                let world_position = seat_rotation.mul_vec3(base_hand_position + local_position);
+            // Track which existing entities we've matched so we don't reuse them
+            let mut claimed_entities = HashSet::new();
 
-                let final_rotation = if is_human || omniscience.0 {
-                    seat_rotation
+            for (i, tile, is_drawn_tile) in logical_target_slots {
+                let offset_x = if is_drawn_tile {
+                    local_start_x + (hand.0.len() as f32 * spacing_x) + 0.12
                 } else {
-                    seat_rotation * Quat::from_rotation_y(std::f32::consts::PI)
+                    local_start_x + (i as f32 * spacing_x)
                 };
 
-                spawn_tile_instance(&mut commands, &tile_models, &drawn.0, player_entity, world_position, final_rotation, tile_scale, true);
+                let local_position = Vec3::new(offset_x, 0.0, 0.0);
+                let target_position = seat_rotation.mul_vec3(base_hand_position + local_position);
+
+                let target_rotation = if !is_human && omniscience.0 {
+                    seat_rotation * Quat::from_rotation_y(std::f32::consts::PI)
+                } else {
+                    seat_rotation
+                };
+
+                // Find a matching existing visual tile
+                let mut matched_entity = None;
+                for (vis_entity, vis_slot, _vis_transform) in existing_slots.iter_mut() {
+                    if vis_slot.owner == player_entity
+                        && vis_slot.zone == TileZone::Hand
+                        && vis_slot.tile == *tile
+                        && !claimed_entities.contains(&vis_entity)
+                    {
+                        matched_entity = Some(vis_entity);
+                        break;
+                    }
+                }
+
+                let target_transform = Transform::from_translation(target_position).with_rotation(target_rotation);
+
+                if let Some(vis_ent) = matched_entity {
+                    // Update existing tile and animate it
+                    claimed_entities.insert(vis_ent);
+
+                    // Update its slot index
+                    if let Ok((_, mut slot, _)) = existing_slots.get_mut(vis_ent) {
+                        slot.index = i;
+                    }
+
+                    commands.entity(vis_ent).insert(AnimateTo {
+                        target_transform,
+                        speed: 15.0, // Adjust for slide speed
+                    });
+                    busy.0 += 1;
+                } else {
+                    // It's a new tile! (Spawn it slightly above and animate it dropping into place)
+                    let spawn_pos = target_position + Vec3::new(0.0, 1.0, 0.0);
+                    if let Some(new_ent) = spawn_tile_instance(
+                        &mut commands, &tile_models, tile, player_entity,
+                        TileZone::Hand, i, spawn_pos, target_rotation, tile_scale
+                    ) {
+                        commands.entity(new_ent).insert(AnimateTo {
+                            target_transform,
+                            speed: 10.0,
+                        });
+                        busy.0 += 1;
+                    }
+                }
+            }
+
+            // Clean up any tiles that belonged to this player's hand but weren't claimed
+            // (e.g. the tile you just discarded)
+            for (vis_entity, vis_slot, _) in existing_slots.iter() {
+                if vis_slot.owner == player_entity
+                    && vis_slot.zone == TileZone::Hand
+                    && !claimed_entities.contains(&vis_entity)
+                {
+                    commands.entity(vis_entity).despawn();
+                }
             }
         }
     }
@@ -259,11 +311,13 @@ fn render_hands_system(
 
 // TODO: despawn called tiles from kawa
 // ! either that or stick with rendering the vector and ditch the entity logic
-fn render_kawa_system(
+pub fn render_kawa_system(
     mut commands: Commands,
     players_query: Query<(Entity, &Kawa, &Seat, Ref<Kawa>, Option<&Riichi>, Option<Ref<CalledKawaIndices>>)>,
+    current_discard_query: Query<(&DiscardedBy, &IsTsumogiri), With<CurrentDiscard>>,
     tile_models: Res<TileModels>,
-    existing_kawa_tiles: Query<(Entity, &VisualKawaTile)>,
+    mut existing_slots: Query<(Entity, &mut TileSlot, &Transform)>,
+    mut busy: ResMut<AnimationBusy>,
 ) {
     if tile_models.models.is_empty() { return; }
     let force_redraw = tile_models.is_changed();
@@ -275,12 +329,6 @@ fn render_kawa_system(
         let called_changed = maybe_called.as_ref().is_some_and(|c| c.is_changed() || c.is_added());
 
         if force_redraw || kawa_changed || called_changed {
-            for (visual_entity, visual_tile) in &existing_kawa_tiles {
-                if visual_tile.owner == player_entity {
-                    commands.entity(visual_entity).despawn();
-                }
-            }
-
             let seat_index = seat.0;
             let seat_rotation = Quat::from_rotation_y(seat_index as f32 * std::f32::consts::FRAC_PI_2);
 
@@ -305,6 +353,7 @@ fn render_kawa_system(
             }
 
             let mut visual_index = 0;
+            let mut claimed_entities = std::collections::HashSet::new();
 
             for (index, tile) in kawa.0.iter().enumerate() {
                 if skipped_indices.contains(&index) { continue; } // skip called tile
@@ -336,18 +385,100 @@ fn render_kawa_system(
                 let offset_z = row_index as f32 * spacing_z;
 
                 let local_position = base_kawa_position + Vec3::new(offset_x, 0.0, offset_z);
-                let world_position = seat_rotation.mul_vec3(local_position);
+                let target_position = seat_rotation.mul_vec3(local_position);
 
                 let is_riichi_tile = Some(index) == riichi_index;
-                let final_rotation = if is_riichi_tile {
+                let target_rotation = if is_riichi_tile {
                     flat_rotation * Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)
                 } else {
                     flat_rotation
                 };
 
-                spawn_tile_instance(&mut commands, &tile_models, tile, player_entity, world_position, final_rotation, tile_scale, false);
+                let target_transform = Transform::from_translation(target_position).with_rotation(target_rotation);
+
+                // 1. Try to find a tile ALREADY in the Kawa
+                let mut matched_entity = None;
+                for (vis_entity, vis_slot, _) in existing_slots.iter() {
+                    if vis_slot.owner == player_entity
+                        && vis_slot.zone == TileZone::Kawa
+                        && vis_slot.index == index
+                    {
+                        matched_entity = Some(vis_entity);
+                        break;
+                    }
+                }
+
+                // 2. If not in Kawa, look for an orphaned tile in the HAND (this creates the flying animation!)
+                if matched_entity.is_none() {
+                    // Check if this specific tile is the one we JUST discarded this frame
+                    let mut is_tsumogiri = false;
+                    if index == kawa.0.len() - 1 {
+                        for (discarded_by, tsumogiri_flag) in &current_discard_query {
+                            if discarded_by.0 == player_entity {
+                                is_tsumogiri = tsumogiri_flag.0;
+                            }
+                        }
+                    }
+
+                    let mut best_match = None;
+                    let mut best_score = -999;
+
+                    for (vis_entity, vis_slot, _) in existing_slots.iter() {
+                        if vis_slot.owner == player_entity
+                            && vis_slot.zone == TileZone::Hand
+                            && vis_slot.tile == *tile
+                            && !claimed_entities.contains(&vis_entity)
+                        {
+                            // tegawari = lowest index; tsumogiri = highest index
+                            let score = if is_tsumogiri {
+                                vis_slot.index as i32
+                            } else {
+                                -(vis_slot.index as i32)
+                            };
+
+                            if best_match.is_none() || score > best_score {
+                                best_score = score;
+                                best_match = Some(vis_entity);
+                            }
+                        }
+                    }
+                    matched_entity = best_match;
+                }
+
+                if let Some(vis_ent) = matched_entity {
+                    claimed_entities.insert(vis_ent);
+                    if let Ok((_, mut slot, _)) = existing_slots.get_mut(vis_ent) {
+                        slot.zone = TileZone::Kawa; // Steal it from the hand!
+                        slot.index = index;
+                    }
+                    commands.entity(vis_ent).insert(AnimateTo {
+                        target_transform,
+                        speed: 12.0,
+                    });
+                    busy.0 += 1;
+                } else {
+                    // Fallback spawn if we couldn't steal from the hand
+                    let spawn_pos = target_position + Vec3::new(0.0, 1.0, 0.0);
+                    if let Some(new_ent) = spawn_tile_instance(
+                        &mut commands, &tile_models, tile, player_entity,
+                        TileZone::Kawa, index, spawn_pos, target_rotation, tile_scale
+                    ) {
+                        commands.entity(new_ent).insert(AnimateTo { target_transform, speed: 10.0 });
+                        busy.0 += 1;
+                    }
+                }
 
                 visual_index += 1;
+            }
+
+            // Cleanup orphaned Kawa tiles (fixes the memory leak / round change bug)
+            for (vis_entity, vis_slot, _) in existing_slots.iter() {
+                if vis_slot.owner == player_entity
+                    && vis_slot.zone == TileZone::Kawa
+                    && !claimed_entities.contains(&vis_entity)
+                {
+                    commands.entity(vis_entity).despawn();
+                }
             }
         }
     }
@@ -688,41 +819,41 @@ fn spawn_tile_instance(
     tile_models: &TileModels,
     tile: &Tile,
     owner: Entity,
+    zone: TileZone,      // NEW
+    index: usize,        // NEW
     position: Vec3,
     rotation: Quat,
     scale: f32,
-    is_hand: bool,
-) {
+) -> Option<Entity> {    // Return the entity so we can attach AnimateTo if needed
     let name = get_tile_model_name(tile);
-    let Some(parts) = tile_models.models.get(&name) else { return; };
+    let parts = tile_models.models.get(&name)?;
 
-    for part in parts {
-        let part_transform = Transform {
-            translation: position + rotation.mul_vec3(part.transform.translation * scale),
-            rotation: rotation * part.transform.rotation,
-            scale: Vec3::splat(scale) * part.transform.scale,
-        };
+    // We spawn a parent entity to hold the TileSlot, and attach the meshes as children.
+    // This makes it much easier to animate one Transform instead of multiple mesh parts.
+    let parent = commands.spawn((
+        TileSlot { owner, zone, index, tile: *tile },
+        Transform::from_translation(position).with_rotation(rotation),
+        Visibility::default(),
+        InheritedVisibility::default(),
+    )).id();
 
-        if is_hand {
-            commands.spawn((
-                VisualHandTile { owner },
+    commands.entity(parent).with_children(|parent| {
+        for part in parts {
+            let part_transform = Transform {
+                translation: part.transform.translation * scale,
+                rotation: part.transform.rotation,
+                scale: Vec3::splat(scale) * part.transform.scale,
+            };
+
+            parent.spawn((
                 Mesh3d(part.mesh.clone()),
                 MeshMaterial3d(part.material.clone()),
                 part_transform,
-                Visibility::default(),
-                InheritedVisibility::default(),
-            ));
-        } else {
-            commands.spawn((
-                VisualKawaTile { owner },
-                Mesh3d(part.mesh.clone()),
-                MeshMaterial3d(part.material.clone()),
-                part_transform,
-                Visibility::default(),
-                InheritedVisibility::default(),
             ));
         }
-    }
+    });
+
+    Some(parent)
 }
 
 fn spawn_mentsu_instance(
@@ -755,21 +886,15 @@ fn spawn_mentsu_instance(
     }
 }
 
-fn cleanup_orphaned_visuals_system(
+pub fn cleanup_orphaned_visuals_system(
     mut commands: Commands,
-    visual_hands: Query<(Entity, &VisualHandTile)>,
-    visual_kawa: Query<(Entity, &VisualKawaTile)>,
+    visual_slots: Query<(Entity, &TileSlot)>,
     visual_mentsu: Query<(Entity, &VisualMentsuTile)>,
     visual_nuki: Query<(Entity, &VisualNukidoraTile)>,
     players_query: Query<&Hand>,
 ) {
-    for (visual_entity, visual_tile) in &visual_hands {
-        if players_query.get(visual_tile.owner).is_err() {
-            commands.entity(visual_entity).despawn();
-        }
-    }
-    for (visual_entity, visual_tile) in &visual_kawa {
-        if players_query.get(visual_tile.owner).is_err() {
+    for (visual_entity, slot) in &visual_slots {
+        if players_query.get(slot.owner).is_err() {
             commands.entity(visual_entity).despawn();
         }
     }
@@ -781,6 +906,66 @@ fn cleanup_orphaned_visuals_system(
     for (visual_entity, visual_tile) in &visual_nuki {
         if players_query.get(visual_tile.owner).is_err() {
             commands.entity(visual_entity).despawn();
+        }
+    }
+}
+
+
+pub fn clear_board_visuals_system(
+    mut commands: Commands,
+    visual_slots: Query<Entity, With<TileSlot>>,
+    visual_mentsu: Query<Entity, With<VisualMentsuTile>>,
+    visual_nuki: Query<Entity, With<VisualNukidoraTile>>,
+) {
+    for entity in &visual_slots {
+        commands.entity(entity).despawn();
+    }
+    for entity in &visual_mentsu {
+        commands.entity(entity).despawn();
+    }
+    for entity in &visual_nuki {
+        commands.entity(entity).despawn();
+    }
+}
+
+
+pub fn sync_animation_busy_system(
+    animating: Query<(), With<AnimateTo>>,
+    mut busy: ResMut<AnimationBusy>,
+) {
+    // overwrite the manual counter with the actual physical reality of the board
+    busy.0 = if animating.is_empty() { 0 } else { 1 };
+}
+
+
+pub fn process_animations_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut query: Query<(Entity, &mut Transform, &AnimateTo)>,
+    mut busy: ResMut<AnimationBusy>,
+) {
+    let dt = time.delta_secs();
+
+    for (entity, mut transform, anim) in query.iter_mut() {
+        // Lerp translation
+        transform.translation = transform.translation.lerp(anim.target_transform.translation, anim.speed * dt);
+
+        // Slerp rotation
+        transform.rotation = transform.rotation.slerp(anim.target_transform.rotation, anim.speed * dt);
+
+        // Check if we arrived (using a small distance threshold)
+        if transform.translation.distance(anim.target_transform.translation) < 0.005 {
+            // Snap to exact target to avoid floating point drift
+            transform.translation = anim.target_transform.translation;
+            transform.rotation = anim.target_transform.rotation;
+
+            // Remove the animation component
+            commands.entity(entity).remove::<AnimateTo>();
+
+            // Decrement the global busy counter
+            if busy.0 > 0 {
+                busy.0 -= 1;
+            }
         }
     }
 }

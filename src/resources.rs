@@ -499,3 +499,12 @@ pub struct ReplayLog {
 pub struct ExportableReplayLog {
     pub events: Vec<ReplayEvent<u8>>,
 }
+
+
+// Counter for active animations. If > 0, game logic should wait.
+#[derive(Resource, Default)]
+pub struct AnimationBusy(pub u32);
+
+// fake thinking
+#[derive(Resource)]
+pub struct BotThinkTimer(pub Timer);

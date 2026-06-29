@@ -24,6 +24,7 @@ use board_systems::*;
 use bot_systems::*;
 use states::*;
 use ui::*;
+use visuals::*;
 
 
 fn main() {
@@ -32,6 +33,7 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugins(EguiPlugin::default())
         .add_plugins(visuals::VisualsPlugin)
+        .init_resource::<AnimationBusy>()
         .init_resource::<CallLock>()
         .init_state::<TurnState>()
         .add_systems(EguiPrimaryContextPass, (info_display_ui_system).run_if(resource_exists::<Wall>))
@@ -66,6 +68,7 @@ fn main() {
         ).chain())
         // new round
         .add_systems(OnEnter(TurnState::StartNewRound), (
+            clear_board_visuals_system,
             start_round,
             set_tenpai,
         ).chain())
@@ -81,8 +84,10 @@ fn main() {
             ankan_check,
             shouminkan_check,
             nukidora_check,
+            setup_bot_think_timer,
         ).chain())
         .add_systems(Update, (
+            bot_think_timer_system,
             declare_tsumo,
             declare_riichi,
             declare_kyuushu,

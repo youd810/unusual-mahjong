@@ -8,8 +8,35 @@ use crate::resources::*;
 use crate::messages::*;
 
 
-
 // TODO: make bots more assertive to yakuhai calls (or just call in general) if their hand already has other yaku
+
+
+pub fn setup_bot_think_timer(
+    current_turn: Res<CurrentTurn>,
+    query: Query<Has<HumanPlayer>>,
+    mut commands: Commands,
+) {
+    let is_human = query.get(current_turn.0).unwrap_or(false);
+
+    if !is_human {
+        // randomly waits between 1 and 2.5 seconds
+        let duration = rand::rng().random_range(1.0..=2.5);
+        commands.insert_resource(BotThinkTimer(Timer::from_seconds(duration, TimerMode::Once)));
+    }
+}
+
+pub fn bot_think_timer_system(
+    time: Res<Time>,
+    mut timer_opt: Option<ResMut<BotThinkTimer>>,
+    busy: Res<AnimationBusy>,
+) {
+    // only starts after animation ends
+    if busy.0 > 0 { return; }
+
+    if let Some(mut timer) = timer_opt {
+        timer.0.tick(time.delta());
+    }
+}
 
 pub fn determine_bot_strategy(
     hand: &[Tile],
@@ -188,6 +215,7 @@ pub fn determine_bot_strategy(
 
 pub fn bot_discard_system(
     current_turn: Res<CurrentTurn>,
+    timer: Option<Res<BotThinkTimer>>,
     query: Query<(
         Entity, Option<&DrawnTile>, &Hand, &OpenMentsu, &BotProfile,
         Has<RiichiSelecting>, Option<&ForbiddenDiscard>, Option<&RiichiOption>, Has<Riichi>,
@@ -206,6 +234,10 @@ pub fn bot_discard_system(
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
     mut commands: Commands,
 ) {
+    if let Some(t) = &timer {
+        if !t.0.is_finished() { return; }
+    }
+
     if let Ok((
         player, maybe_drawn, hand, 
         open_mentsu, profile, is_selecting,
@@ -364,7 +396,10 @@ pub fn bot_call_system(
     wall: Res<Wall>,
     revolver: Res<Revolver>,
     mut commands: Commands,
+    busy: Res<AnimationBusy>,
 ) {
+    if busy.0 > 0 { return; }
+
     for (player, profile, hand, open_mentsu, nuked_tiles, jikaze, ron, pon, chi, kan) in query.iter() {
         if ron.is_none() && pon.is_none() && chi.is_none() && kan.is_none() { continue; }
 

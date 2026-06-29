@@ -256,3 +256,30 @@ pub struct NukedTiles(pub Vec<Tile>);
 #[derive(Component)]
 pub struct NukidoraOption(pub Vec<Tile>);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileZone {
+    Hand,
+    Kawa,
+    OpenMentsu,
+    Wall,
+    Nukidora,
+}
+
+// gives a visual entity an identity so we can update it rather than despawn it
+#[derive(Component, Debug)]
+pub struct TileSlot {
+    pub owner: Entity,
+    pub zone: TileZone,
+    pub index: usize,
+    pub tile: Tile,
+}
+
+// attached to a visual entity to make it move over time
+#[derive(Component)]
+pub struct AnimateTo {
+    pub target_transform: Transform,
+    pub speed: f32,
+}
+
+#[derive(Component)]
+pub struct IsTsumogiri(pub bool);
