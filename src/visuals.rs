@@ -9,6 +9,7 @@ use crate::resources::*;
 pub struct TilePart {
     pub mesh: Handle<Mesh>,
     pub material: Handle<StandardMaterial>,
+    pub highlight_material: Handle<StandardMaterial>,
     pub transform: Transform,
 }
 
@@ -102,6 +103,7 @@ fn check_gltf_loaded(
     gltf_assets: Res<Assets<Gltf>>,
     gltf_nodes: Res<Assets<GltfNode>>,
     gltf_meshes: Res<Assets<GltfMesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>, // Added
     mut tile_models: ResMut<TileModels>,
 ) {
     let Some(state) = load_state else { return };
@@ -129,6 +131,7 @@ fn check_gltf_loaded(
                 found_handle,
                 &gltf_nodes,
                 &gltf_meshes,
+                &mut materials, // Added
                 Transform::IDENTITY,
                 &mut parts,
                 true,
@@ -143,19 +146,16 @@ fn check_gltf_loaded(
     println!("Visual models extracted successfully.");
 }
 
-
 fn collect_tile_parts(
     node_handle: &Handle<GltfNode>,
     gltf_nodes: &Assets<GltfNode>,
     gltf_meshes: &Assets<GltfMesh>,
+    materials: &mut Assets<StandardMaterial>,
     accumulated_transform: Transform,
     out_list: &mut Vec<TilePart>,
     is_root: bool,
 ) {
     let Some(node) = gltf_nodes.get(node_handle) else { return; };
-
-    // strictly strip ONLY the root node to remove the artist's table placements
-    // DO NOT override child rotations, ensuring front and back meshes stay connected
     let local_transform = if is_root { Transform::IDENTITY } else { node.transform };
     let current_transform = accumulated_transform * local_transform;
 
@@ -163,9 +163,18 @@ fn collect_tile_parts(
         if let Some(gltf_mesh) = gltf_meshes.get(mesh_handle) {
             for primitive in &gltf_mesh.primitives {
                 if let Some(material_handle) = &primitive.material {
+
+                    let mut highlight_handle = material_handle.clone();
+                    if let Some(mat) = materials.get(material_handle) {
+                        let mut cloned = mat.clone();
+                        cloned.emissive = LinearRgba::new(0.6, 0.6, 0.6, 1.0); // The white glow
+                        highlight_handle = materials.add(cloned);
+                    }
+
                     out_list.push(TilePart {
                         mesh: primitive.mesh.clone(),
                         material: material_handle.clone(),
+                        highlight_material: highlight_handle,
                         transform: current_transform,
                     });
                 }
@@ -174,7 +183,7 @@ fn collect_tile_parts(
     }
 
     for child_handle in &node.children {
-        collect_tile_parts(child_handle, gltf_nodes, gltf_meshes, current_transform, out_list, false);
+        collect_tile_parts(child_handle, gltf_nodes, gltf_meshes, materials, current_transform, out_list, false);
     }
 }
 
@@ -273,10 +282,10 @@ pub fn render_hands_system(
                         slot.index = i;
                     }
 
-                    commands.entity(vis_ent).insert(AnimateTo {
-                        target_transform,
-                        speed: 15.0, // Adjust for slide speed
-                    });
+                    commands.entity(vis_ent).insert((
+                        AnimateTo { target_transform, speed: 15.0 }, // slide speed
+                        RestingTransform(target_transform),
+                    ));
                     busy.0 += 1;
                 } else {
                     // It's a new tile! (Spawn it slightly above and animate it dropping into place)
@@ -285,10 +294,10 @@ pub fn render_hands_system(
                         &mut commands, &tile_models, tile, player_entity,
                         TileZone::Hand, i, spawn_pos, target_rotation, tile_scale
                     ) {
-                        commands.entity(new_ent).insert(AnimateTo {
-                            target_transform,
-                            speed: 10.0,
-                        });
+                        commands.entity(new_ent).insert((
+                            AnimateTo { target_transform, speed: 10.0 },
+                            RestingTransform(target_transform),
+                        ));
                         busy.0 += 1;
                     }
                 }
@@ -898,17 +907,15 @@ fn spawn_tile_instance(
     tile_models: &TileModels,
     tile: &Tile,
     owner: Entity,
-    zone: TileZone,      // NEW
-    index: usize,        // NEW
+    zone: TileZone,
+    index: usize,
     position: Vec3,
     rotation: Quat,
     scale: f32,
-) -> Option<Entity> {    // Return the entity so we can attach AnimateTo if needed
+) -> Option<Entity> {
     let name = get_tile_model_name(tile);
     let parts = tile_models.models.get(&name)?;
 
-    // We spawn a parent entity to hold the TileSlot, and attach the meshes as children.
-    // This makes it much easier to animate one Transform instead of multiple mesh parts.
     let parent = commands.spawn((
         TileSlot { owner, zone, index, tile: *tile },
         Transform::from_translation(position).with_rotation(rotation),
@@ -927,6 +934,10 @@ fn spawn_tile_instance(
             parent.spawn((
                 Mesh3d(part.mesh.clone()),
                 MeshMaterial3d(part.material.clone()),
+                TileMaterials {
+                    normal: part.material.clone(),
+                    highlight: part.highlight_material.clone(),
+                },
                 part_transform,
             ));
         }
@@ -934,6 +945,7 @@ fn spawn_tile_instance(
 
     Some(parent)
 }
+
 
 fn spawn_mentsu_instance(
     commands: &mut Commands,

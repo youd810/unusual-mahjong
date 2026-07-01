@@ -76,66 +76,110 @@ pub fn human_discard_ui_system(
         });
 }
 
-pub fn handle_3d_tile_clicks(
+pub fn human_hand_interaction_system(
     mouse_input: Res<ButtonInput<MouseButton>>,
     window_query: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform)>,
-    slot_query: Query<(Entity, &GlobalTransform, &TileSlot)>,
-    query: Query<(Entity, &Hand, Has<RiichiSelecting>, Option<&ForbiddenDiscard>), With<HumanPlayer>>,
+    mut slot_query: Query<(Entity, &GlobalTransform, &TileSlot, &mut Transform, &RestingTransform, Option<&AnimateTo>)>,
+    query: Query<(Entity, &Hand, Option<&RiichiOption>, Has<RiichiSelecting>, Option<&ForbiddenDiscard>), With<HumanPlayer>>,
     current_turn: Res<CurrentTurn>,
     busy: Res<AnimationBusy>,
     mut discard_writer: MessageWriter<DiscardTileMessage>,
     mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
     mut commands: Commands,
 ) {
-    if busy.0 > 0 { return; }
-    if !mouse_input.just_pressed(MouseButton::Left) { return; }
-
     let Ok(window) = window_query.single() else { return };
     let Ok((camera, camera_transform)) = camera_query.single() else { return };
-    let Some(cursor_pos) = window.cursor_position() else { return };
-
-    // Shoot a laser from the camera through the mouse cursor into the 3D world
-    let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) else { return };
 
     let mut best_target = None;
     let mut closest_dist = f32::MAX;
 
-    for (entity, global_transform, slot) in &slot_query {
-        if slot.zone != TileZone::Hand { continue; }
-        if slot.owner != current_turn.0 { continue; }
+    // Only process hover raycast if there are no blocking animations
+    if busy.0 == 0 {
+        if let Some(cursor_pos) = window.cursor_position() {
+            if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
+                for (entity, global_transform, slot, _, _, _) in &slot_query {
+                    if slot.zone != TileZone::Hand || slot.owner != current_turn.0 { continue; }
 
-        let tile_pos = global_transform.translation();
+                    let tile_pos = global_transform.translation();
+                    let ray_dir: Vec3 = ray.direction.into();
+                    let ray_to_tile = tile_pos - ray.origin;
+                    let projection = ray_to_tile.dot(ray_dir);
+                    let point_on_ray = ray.origin + (ray_dir * projection);
+                    let distance = point_on_ray.distance(tile_pos);
 
-        let ray_dir: Vec3 = ray.direction.into();
-        let ray_to_tile = tile_pos - ray.origin;
-        let projection = ray_to_tile.dot(ray_dir);
-        let point_on_ray = ray.origin + (ray_dir * projection);
-        let distance = point_on_ray.distance(tile_pos);
-
-        // 0.09 perfectly bounds a tile with 0.18 spacing
-        if distance < 0.09 && distance < closest_dist {
-            closest_dist = distance;
-            best_target = Some(entity);
+                    if distance < 0.09 && distance < closest_dist {
+                        closest_dist = distance;
+                        best_target = Some(entity);
+                    }
+                }
+            }
         }
     }
 
-    if let Some(target) = best_target {
-        let slot = slot_query.get(target).unwrap().2;
-        if let Ok((player, hand, is_selecting, maybe_forbidden)) = query.get(slot.owner) {
+    // Apply visual hover and click
+    for (entity, _, slot, mut transform, resting, maybe_anim) in &mut slot_query {
+        if slot.zone != TileZone::Hand || slot.owner != current_turn.0 { continue; }
+        if maybe_anim.is_some() { continue; } // Don't interrupt AnimateTo
 
-            if maybe_forbidden.is_some_and(|f| f.0.contains(&slot.tile)) { return; }
-            let is_tsumogiri = slot.index == hand.0.len();
+        let is_hovered = best_target == Some(entity);
+        let mut target_y = resting.0.translation.y;
 
-            if is_selecting {
-                riichi_writer.write(DeclareRiichiMessage { player, tile: slot.tile });
-                commands.entity(player).remove::<RiichiSelecting>();
-            } else {
-                discard_writer.write(DiscardTileMessage {
-                    player,
-                    tile: slot.tile,
-                    is_tsumogiri,
-                });
+        if is_hovered {
+            target_y += 0.05; // Raise tile slightly
+        }
+
+        transform.translation.y += (target_y - transform.translation.y) * 0.3; // Smooth lerp
+
+        // Handle Click
+        if is_hovered && mouse_input.just_pressed(MouseButton::Left) {
+            if let Ok((player, hand, maybe_riichi, is_selecting, maybe_forbidden)) = query.get(slot.owner) {
+                if maybe_forbidden.is_some_and(|f| f.0.contains(&slot.tile)) { continue; }
+
+                if is_selecting && !maybe_riichi.is_some_and(|r| r.0.contains(&slot.tile)) {
+                    continue; // Block clicking invalid tiles during Riichi selection
+                }
+
+                let is_tsumogiri = slot.index == hand.0.len();
+
+                if is_selecting {
+                    riichi_writer.write(DeclareRiichiMessage { player, tile: slot.tile });
+                    commands.entity(player).remove::<RiichiSelecting>();
+                } else {
+                    discard_writer.write(DiscardTileMessage {
+                        player,
+                        tile: slot.tile,
+                        is_tsumogiri,
+                    });
+                }
+            }
+        }
+    }
+}
+
+pub fn tile_highlight_system(
+    query: Query<(Entity, Option<&RiichiOption>, Has<RiichiSelecting>), With<HumanPlayer>>,
+    slots: Query<(Entity, &TileSlot, &Children)>,
+    mut materials_query: Query<(&mut MeshMaterial3d<StandardMaterial>, &TileMaterials)>,
+) {
+    for (player, maybe_riichi, is_selecting) in &query {
+        for (_, slot, children) in &slots {
+            if slot.owner != player || slot.zone != TileZone::Hand { continue; }
+
+            let is_valid = is_selecting && maybe_riichi.is_some_and(|r| r.0.contains(&slot.tile));
+
+            for &child in children {
+                if let Ok((mut mesh_mat, tile_mats)) = materials_query.get_mut(child) {
+                    if is_valid {
+                        if mesh_mat.0 != tile_mats.highlight {
+                            mesh_mat.0 = tile_mats.highlight.clone();
+                        }
+                    } else {
+                        if mesh_mat.0 != tile_mats.normal {
+                            mesh_mat.0 = tile_mats.normal.clone();
+                        }
+                    }
+                }
             }
         }
     }

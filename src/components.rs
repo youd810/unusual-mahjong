@@ -274,6 +274,16 @@ pub struct TileSlot {
     pub tile: Tile,
 }
 
+#[derive(Component)]
+pub struct TileMaterials {
+    pub normal: Handle<StandardMaterial>,
+    pub highlight: Handle<StandardMaterial>,
+}
+
+#[derive(Component)]
+pub struct RestingTransform(pub Transform);
+
+
 // attached to a visual entity to make it move over time
 #[derive(Component)]
 pub struct AnimateTo {
