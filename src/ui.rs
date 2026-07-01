@@ -76,6 +76,71 @@ pub fn human_discard_ui_system(
         });
 }
 
+pub fn handle_3d_tile_clicks(
+    mouse_input: Res<ButtonInput<MouseButton>>,
+    window_query: Query<&Window>,
+    camera_query: Query<(&Camera, &GlobalTransform)>,
+    slot_query: Query<(Entity, &GlobalTransform, &TileSlot)>,
+    query: Query<(Entity, &Hand, Has<RiichiSelecting>, Option<&ForbiddenDiscard>), With<HumanPlayer>>,
+    current_turn: Res<CurrentTurn>,
+    busy: Res<AnimationBusy>,
+    mut discard_writer: MessageWriter<DiscardTileMessage>,
+    mut riichi_writer: MessageWriter<DeclareRiichiMessage>,
+    mut commands: Commands,
+) {
+    if busy.0 > 0 { return; }
+    if !mouse_input.just_pressed(MouseButton::Left) { return; }
+
+    let Ok(window) = window_query.single() else { return };
+    let Ok((camera, camera_transform)) = camera_query.single() else { return };
+    let Some(cursor_pos) = window.cursor_position() else { return };
+
+    // Shoot a laser from the camera through the mouse cursor into the 3D world
+    let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) else { return };
+
+    let mut best_target = None;
+    let mut closest_dist = f32::MAX;
+
+    for (entity, global_transform, slot) in &slot_query {
+        if slot.zone != TileZone::Hand { continue; }
+        if slot.owner != current_turn.0 { continue; }
+
+        let tile_pos = global_transform.translation();
+
+        let ray_dir: Vec3 = ray.direction.into();
+        let ray_to_tile = tile_pos - ray.origin;
+        let projection = ray_to_tile.dot(ray_dir);
+        let point_on_ray = ray.origin + (ray_dir * projection);
+        let distance = point_on_ray.distance(tile_pos);
+
+        // 0.09 perfectly bounds a tile with 0.18 spacing
+        if distance < 0.09 && distance < closest_dist {
+            closest_dist = distance;
+            best_target = Some(entity);
+        }
+    }
+
+    if let Some(target) = best_target {
+        let slot = slot_query.get(target).unwrap().2;
+        if let Ok((player, hand, is_selecting, maybe_forbidden)) = query.get(slot.owner) {
+
+            if maybe_forbidden.is_some_and(|f| f.0.contains(&slot.tile)) { return; }
+            let is_tsumogiri = slot.index == hand.0.len();
+
+            if is_selecting {
+                riichi_writer.write(DeclareRiichiMessage { player, tile: slot.tile });
+                commands.entity(player).remove::<RiichiSelecting>();
+            } else {
+                discard_writer.write(DiscardTileMessage {
+                    player,
+                    tile: slot.tile,
+                    is_tsumogiri,
+                });
+            }
+        }
+    }
+}
+
 
 pub fn call_window_ui_system(
     mut contexts: EguiContexts,

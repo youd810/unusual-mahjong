@@ -87,6 +87,7 @@ fn main() {
             setup_bot_think_timer,
         ).chain())
         .add_systems(Update, (
+            handle_3d_tile_clicks,
             bot_think_timer_system,
             declare_tsumo,
             declare_riichi,
@@ -102,7 +103,7 @@ fn main() {
         // main phase ui
         .add_systems(EguiPrimaryContextPass, (
             main_phase_ui_system,
-            human_discard_ui_system,
+            //human_discard_ui_system,
             debug_ui_system,
         ).run_if(in_state(TurnState::MainPhase))
         .run_if(not(resource_exists::<RoundResult>)))
@@ -114,9 +115,9 @@ fn main() {
             suukaikan,
             set_tenpai,
             ron_check,
+            daiminkan_check, // this should be a priority over pon
             pon_check,
             chi_check,
-            daiminkan_check,
             |mut lock: ResMut<CallLock>| lock.0 = false, // lock reset
         ).chain())
         .add_systems(Update, (

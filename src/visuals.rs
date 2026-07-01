@@ -311,6 +311,7 @@ pub fn render_hands_system(
 
 // TODO: despawn called tiles from kawa
 // ! either that or stick with rendering the vector and ditch the entity logic
+// TODO: riichi tile came back to kawa after being called?
 pub fn render_kawa_system(
     mut commands: Commands,
     players_query: Query<(Entity, &Kawa, &Seat, Ref<Kawa>, Option<&Riichi>, Option<Ref<CalledKawaIndices>>)>,
@@ -661,7 +662,7 @@ pub fn render_wall_system(
     }
 }
 
-
+// ! shouminkan (1 pin) adds a wrong tile (sou 7) (took from chi)
 pub fn render_open_mentsu_system(
     mut commands: Commands,
     players_query: Query<(Entity, &OpenMentsu, &Seat, Ref<OpenMentsu>)>,
