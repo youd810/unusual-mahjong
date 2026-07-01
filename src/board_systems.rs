@@ -512,8 +512,8 @@ pub fn check_ryuukyoku(
 // runs once upon entering CallWindow 
 pub fn ron_check(
     query: Query<(
-        Entity, &Hand, 
-        &OpenMentsu, &NukedTiles, 
+        Entity, &Hand,
+        &OpenMentsu, &NukedTiles,
         &Tenpai, &Kawa, &Jikaze,
         Has<ClosedHand>, Has<Oya>, Has<Riichi>, Has<Ippatsu>, Has<DoubleRiichi>, Has<Furiten>
     )>,
@@ -1261,10 +1261,11 @@ pub fn declare_riichi(
 
 pub fn pon_check(
     query: Query<(Entity, &Hand), Without<Riichi>>,
-    discard: Query<(&DiscardedTile, &DiscardedBy), With<CurrentDiscard>>,
+    discard: Query<(&DiscardedTile, &DiscardedBy), (With<CurrentDiscard>, Without<Chankan>)>,
     mut commands: Commands,
 ) {
     let Ok((tile, discarded_by)) = discard.single() else { return };
+
     for (player, hand) in &query {
         if player == discarded_by.0 { continue; }
         if can_declare_pon(&hand.0, &tile.0) {
@@ -1348,7 +1349,7 @@ pub fn declare_pon(
 
 pub fn chi_check(
     query: Query<(Entity, &Hand, &Jikaze), Without<Riichi>>,
-    discard: Query<(&DiscardedTile, &DiscardedBy), With<CurrentDiscard>>,
+    discard: Query<(&DiscardedTile, &DiscardedBy), (With<CurrentDiscard>, Without<Chankan>)>,
     jikaze_query: Query<&Jikaze>,
     mut commands: Commands,
 ) {
@@ -1358,6 +1359,7 @@ pub fn chi_check(
     for (player, hand, jikaze) in &query {
         if player == discarded_by.0 { continue; }
         if !jikaze.0.is_kamicha_to(&discarder_jikaze.0) { continue; }
+
         let positions = can_declare_chi(&hand.0, &tile.0);
         if !positions.is_empty() {
             println!("{} has Chi option on {:?} (positions: {:?})", player, tile.0, positions);
@@ -1548,13 +1550,14 @@ pub fn ankan_check(
 
 pub fn daiminkan_check(
     query: Query<(Entity, &Hand), Without<Riichi>>,
-    discard: Query<(&DiscardedTile, &DiscardedBy), With<CurrentDiscard>>,
+    discard: Query<(&DiscardedTile, &DiscardedBy), (With<CurrentDiscard>, Without<Chankan>)>,
     open_query: Query<&OpenMentsu>,
     mut commands: Commands,
 ) {
     if player_and_total_kan_count(&open_query).1 >= 4 { return; }
 
     let Ok((tile, discarded_by)) = discard.single() else { return };
+
     for (player, hand) in &query {
         if player == discarded_by.0 { continue; }
         if can_declare_kan_from_hand(&hand.0, &tile.0) == 3 {
