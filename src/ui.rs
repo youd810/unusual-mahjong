@@ -98,15 +98,25 @@ pub fn human_hand_interaction_system(
     if busy.0 == 0 {
         if let Some(cursor_pos) = window.cursor_position() {
             if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_pos) {
-                for (entity, global_transform, slot, _, _, _) in &slot_query {
+                let ray_dir: Vec3 = ray.direction.into();
+
+                for (entity, _, slot, _, resting, _) in &slot_query {
                     if slot.zone != TileZone::Hand || slot.owner != current_turn.0 { continue; }
 
-                    let tile_pos = global_transform.translation();
-                    let ray_dir: Vec3 = ray.direction.into();
-                    let ray_to_tile = tile_pos - ray.origin;
-                    let projection = ray_to_tile.dot(ray_dir);
-                    let point_on_ray = ray.origin + (ray_dir * projection);
-                    let distance = point_on_ray.distance(tile_pos);
+                    // Base point and raised point
+                    let p1 = resting.0.translation;
+                    let p2 = resting.0.translation + Vec3::new(0.0, 0.05, 0.0);
+
+                    // Check distance to bottom position
+                    let proj1 = (p1 - ray.origin).dot(ray_dir);
+                    let dist1 = (ray.origin + ray_dir * proj1).distance(p1);
+
+                    // Check distance to top position
+                    let proj2 = (p2 - ray.origin).dot(ray_dir);
+                    let dist2 = (ray.origin + ray_dir * proj2).distance(p2);
+
+                    // Min distance creates a stretched vertical capsule hitbox
+                    let distance = dist1.min(dist2);
 
                     if distance < 0.09 && distance < closest_dist {
                         closest_dist = distance;

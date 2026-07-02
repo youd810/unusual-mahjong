@@ -61,15 +61,17 @@ impl Plugin for VisualsPlugin {
             .add_systems(PostUpdate, (
                 check_gltf_loaded,
                 process_animations_system,
+
+                // strictly enforce stealing priority order
                 (
+                    render_open_mentsu_system,
                     render_kawa_system,
                     render_hands_system,
-                    sync_animation_busy_system, // locked in at the end of the chain
+                    render_wall_system,
+                    render_nukidora_system,
+                    sync_animation_busy_system,
                 ).chain().run_if(resource_exists::<TileModels>),
 
-                render_wall_system.run_if(resource_exists::<TileModels>),
-                render_open_mentsu_system.run_if(resource_exists::<TileModels>),
-                render_nukidora_system.run_if(resource_exists::<TileModels>),
                 cleanup_orphaned_visuals_system,
                 spawn_riichi_stick_system,
                 cleanup_riichi_sticks_system,
@@ -333,8 +335,6 @@ pub fn render_kawa_system(
     let force_redraw = tile_models.is_changed();
 
     for (player_entity, kawa, seat, ref_kawa, maybe_riichi, maybe_called) in &players_query {
-
-        // Check if either the Kawa array OR the called indices updated
         let kawa_changed = ref_kawa.is_changed();
         let called_changed = maybe_called.as_ref().is_some_and(|c| c.is_changed() || c.is_added());
 
@@ -348,11 +348,11 @@ pub fn render_kawa_system(
             let flat_rotation = seat_rotation * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
 
             let riichi_index = maybe_riichi.map(|r| kawa.0.len().saturating_sub(1 + r.turns_since as usize));
-
-            // Extract the actual vector out of the Ref wrapper
             let skipped_indices = maybe_called.as_ref().map(|c| c.0.clone()).unwrap_or_default();
 
-            // calculate the visual position of the riichi tile to shift the row correctly
+            let mut claimed_entities = std::collections::HashSet::new();
+
+            // Calculate riichi offset target to avoid diagonal warping
             let mut r_visual_idx = 0;
             if let Some(r_idx) = riichi_index {
                 if !skipped_indices.contains(&r_idx) {
@@ -362,18 +362,15 @@ pub fn render_kawa_system(
                 }
             }
 
-            let mut visual_index = 0;
-            let mut claimed_entities = std::collections::HashSet::new();
+            let mut visual_index = 0; // Restore visual_index for tight packing
 
             for (index, tile) in kawa.0.iter().enumerate() {
-                if skipped_indices.contains(&index) { continue; } // skip called tile
+                if skipped_indices.contains(&index) { continue; }
 
                 let row_index = visual_index / 6;
                 let col_index = visual_index % 6;
 
-                // kinda center-ish
                 let base_kawa_position = Vec3::new(-0.5, 0.0, 1.0);
-
                 let mut offset_x = col_index as f32 * spacing_x;
 
                 if let Some(r_idx) = riichi_index {
@@ -391,9 +388,7 @@ pub fn render_kawa_system(
                     }
                 }
 
-                // new row descending
                 let offset_z = row_index as f32 * spacing_z;
-
                 let local_position = base_kawa_position + Vec3::new(offset_x, 0.0, offset_z);
                 let target_position = seat_rotation.mul_vec3(local_position);
 
@@ -406,21 +401,36 @@ pub fn render_kawa_system(
 
                 let target_transform = Transform::from_translation(target_position).with_rotation(target_rotation);
 
-                // 1. Try to find a tile ALREADY in the Kawa
+                // 1. Try to find the exact tile already in the Kawa
                 let mut matched_entity = None;
                 for (vis_entity, vis_slot, _) in existing_slots.iter() {
                     if vis_slot.owner == player_entity
                         && vis_slot.zone == TileZone::Kawa
                         && vis_slot.index == index
+                        && vis_slot.tile == *tile // Ensure type match holds strong
+                        && !claimed_entities.contains(&vis_entity)
                     {
                         matched_entity = Some(vis_entity);
                         break;
                     }
                 }
 
-                // 2. If not in Kawa, look for an orphaned tile in the HAND (this creates the flying animation!)
+                // 2. Fallback: look for any unclaimed kawa tile of the correct type
                 if matched_entity.is_none() {
-                    // Check if this specific tile is the one we JUST discarded this frame
+                    for (vis_entity, vis_slot, _) in existing_slots.iter() {
+                        if vis_slot.owner == player_entity
+                            && vis_slot.zone == TileZone::Kawa
+                            && vis_slot.tile == *tile
+                            && !claimed_entities.contains(&vis_entity)
+                        {
+                            matched_entity = Some(vis_entity);
+                            break;
+                        }
+                    }
+                }
+
+                // 3. Steal from hand
+                if matched_entity.is_none() {
                     let mut is_tsumogiri = false;
                     if index == kawa.0.len() - 1 {
                         for (discarded_by, tsumogiri_flag) in &current_discard_query {
@@ -439,7 +449,6 @@ pub fn render_kawa_system(
                             && vis_slot.tile == *tile
                             && !claimed_entities.contains(&vis_entity)
                         {
-                            // tegawari = lowest index; tsumogiri = highest index
                             let score = if is_tsumogiri {
                                 vis_slot.index as i32
                             } else {
@@ -458,7 +467,7 @@ pub fn render_kawa_system(
                 if let Some(vis_ent) = matched_entity {
                     claimed_entities.insert(vis_ent);
                     if let Ok((_, mut slot, _)) = existing_slots.get_mut(vis_ent) {
-                        slot.zone = TileZone::Kawa; // Steal it from the hand!
+                        slot.zone = TileZone::Kawa;
                         slot.index = index;
                     }
                     commands.entity(vis_ent).insert(AnimateTo {
@@ -467,7 +476,6 @@ pub fn render_kawa_system(
                     });
                     busy.0 += 1;
                 } else {
-                    // Fallback spawn if we couldn't steal from the hand
                     let spawn_pos = target_position + Vec3::new(0.0, 1.0, 0.0);
                     if let Some(new_ent) = spawn_tile_instance(
                         &mut commands, &tile_models, tile, player_entity,
@@ -478,10 +486,10 @@ pub fn render_kawa_system(
                     }
                 }
 
-                visual_index += 1;
+                visual_index += 1; // Increment visual_index to seal the gaps
             }
 
-            // Cleanup orphaned Kawa tiles (fixes the memory leak / round change bug)
+            // Cleanup orphaned Kawa tiles
             for (vis_entity, vis_slot, _) in existing_slots.iter() {
                 if vis_slot.owner == player_entity
                     && vis_slot.zone == TileZone::Kawa
@@ -553,7 +561,7 @@ pub fn render_wall_system(
     let Some(wall) = wall else { return };
     if tile_models.models.is_empty() { return; }
 
-    // Run if the wall changed OR if the glTF models just finished loading
+    // run if the wall changed OR if the glTF models just finished loading
     if !wall.is_changed() && !tile_models.is_changed() { return; }
 
     // clear the old wall meshes
@@ -566,14 +574,15 @@ pub fn render_wall_system(
     let tile_height = 0.14;
     let wall_radius = 1.9;
 
-    // The index where the Dead Wall begins logically
-    let dead_wall_base_idx = wall.tiles.len() - 14;
+    // the index where the dead wall begins logically
+    let dead_wall_size = wall.rinshan_max + 10;
+    let dead_wall_base_idx = wall.tiles.len() - dead_wall_size;
 
     for index in 0..wall.tiles.len() {
-        // 1. Skip standard drawn tiles
+        // 1. skip standard drawn tiles
         if index < wall.head { continue; }
 
-        // 2. Skip drawn rinshan tiles (matches exact logical indices)
+        // 2. skip drawn rinshan tiles (matches exact logical indices)
         let mut was_rinshan_drawn = false;
         for r in 0..wall.rinshan_draws {
             let rinshan_idx = dead_wall_base_idx + r;
@@ -584,9 +593,9 @@ pub fn render_wall_system(
         }
         if was_rinshan_drawn { continue; }
 
-        // 3. Logical mapping (remap Dead Wall so it physically sits at the end of the loop)
+        // 3. logical mapping (remap dead wall so it physically sits at the end of the loop)
         let logical_stack = if index >= dead_wall_base_idx {
-            // Reverses the order so index 122 (Rinshan) is at physical stack 67 (closest to the break)
+            // reverses the order so the first rinshan tile is at the physical stack closest to the break
             let offset = (index - dead_wall_base_idx) / 2;
             67 - offset
         } else {
@@ -594,17 +603,17 @@ pub fn render_wall_system(
         };
         let is_bottom = index % 2 != 0;
 
-        // 4. Calculate where the table breaks based on dice roll
-        // The break happens `dice_roll` stacks from the RIGHT edge.
+        // 4. calculate where the table breaks based on dice roll
+        // the break happens `dice_roll` stacks from the RIGHT edge.
         let break_side = (wall.oya_seat as usize + wall.dice_roll - 1) % 4;
 
-        // 5. The first drawn tile is exactly to the left of the counted stacks.
-        // If we count 11 from the right (stacks 16 down to 6), the first draw is stack 5.
+        // 5. the first drawn tile is exactly to the left of the counted stacks.
+        // if we count 11 from the right (stacks 16 down to 6), the first draw is stack 5.
         let first_draw_stack_in_side = 16 - wall.dice_roll;
         let first_draw_global = (break_side * 17) + first_draw_stack_in_side;
 
-        // 6. Map logical_stack to physical_stack moving CLOCKWISE (subtracting instead of adding)
-        // Add 68 before modulo to prevent negative numbers
+        // 6. map logical_stack to physical_stack moving CLOCKWISE (subtracting instead of adding)
+        // add 68 before modulo to prevent negative numbers
         let physical_stack = (first_draw_global + 68 - logical_stack) % 68;
 
         let side = physical_stack / 17;
@@ -612,10 +621,10 @@ pub fn render_wall_system(
 
         let side_rotation = Quat::from_rotation_y(side as f32 * std::f32::consts::FRAC_PI_2);
 
-        // 7. Visual offset for the Wanpai (Dead Wall)
-        // The Wanpai is the last 7 stacks. Since we draw clockwise, we need to push it
+        // 7. visual offset for the wanpai (dead wall)
+        // the wanpai is the last stacks. since we draw clockwise, we need to push it
         // slightly counter-clockwise to create a visual gap from the end of the live wall.
-        let is_dead_wall = logical_stack >= 61;
+        let is_dead_wall = index >= dead_wall_base_idx;
         let gap_offset = if is_dead_wall { -stack_spacing * 0.6 } else { 0.0 };
 
         let local_x = (stack as f32 - 8.0) * stack_spacing + gap_offset;
@@ -625,9 +634,9 @@ pub fn render_wall_system(
         let local_position = Vec3::new(local_x, local_y, local_z);
         let world_position = side_rotation.mul_vec3(local_position);
 
-        // 8. Dora indicator check (matches exact logical indices)
+        // 8. dora indicator check (matches exact logical indices)
         let mut is_dora = false;
-        let base_dora_idx = dead_wall_base_idx + wall.rinshan_max;
+        let base_dora_idx = wall.tiles.len() - 10; // strictly pinned to the last 10 tiles
         for i in 0..wall.dora_count {
             let dora_idx = base_dora_idx + (i * 2);
             if index == dora_idx {
@@ -636,7 +645,7 @@ pub fn render_wall_system(
             }
         }
 
-        // 9. Final Rotations
+        // 9. final rotations
         let placement_rotation = side_rotation * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
         let visual_rotation = if is_dora {
             placement_rotation * Quat::from_rotation_x(std::f32::consts::PI)
@@ -644,7 +653,7 @@ pub fn render_wall_system(
             placement_rotation
         };
 
-        // 10. Spawning
+        // 10. spawning
         let tile = &wall.tiles[index];
         let name = get_tile_model_name(tile);
 
@@ -670,6 +679,7 @@ pub fn render_wall_system(
         }
     }
 }
+
 
 // ! shouminkan (1 pin) adds a wrong tile (sou 7) (took from chi)
 pub fn render_open_mentsu_system(
@@ -754,21 +764,37 @@ pub fn render_open_mentsu_system(
 
                     let target_transform = Transform::from_translation(target_position).with_rotation(target_rotation);
 
-                    // --- STEAL & ANIMATION LOGIC ---
+                    // steal & animation logic
                     let mut matched_entity = None;
 
-                    // 1. Try to find the exact Mentsu tile already placed (so it doesn't reset)
+                    // 1. try to find the exact mentsu tile already placed (so it doesn't reset)
                     for (vis_entity, vis_slot, _) in existing_slots.iter() {
                         if vis_slot.owner == player_entity
                             && vis_slot.zone == TileZone::OpenMentsu
                             && vis_slot.index == visual_index
+                            && vis_slot.tile == *tile // <-- explicit type check
+                            && !claimed_entities.contains(&vis_entity)
                         {
                             matched_entity = Some(vis_entity);
                             break;
                         }
                     }
 
-                    // 2. If missing, figure out where to steal it from
+                    // 2. if indices shifted, look for any unclaimed open mentsu tile of the same type
+                    if matched_entity.is_none() {
+                        for (vis_entity, vis_slot, _) in existing_slots.iter() {
+                            if vis_slot.owner == player_entity
+                                && vis_slot.zone == TileZone::OpenMentsu
+                                && vis_slot.tile == *tile
+                                && !claimed_entities.contains(&vis_entity)
+                            {
+                                matched_entity = Some(vis_entity);
+                                break;
+                            }
+                        }
+                    }
+
+                    // 3. if still missing, figure out where to steal it from
                     if matched_entity.is_none() {
                         let is_called_tile = match mentsu {
                             Mentsu::Ankan(_) | Mentsu::Shouminkan(_, _) => false,
@@ -778,7 +804,7 @@ pub fn render_open_mentsu_system(
                             _ => false,
                         };
 
-                        // The called tile comes from the table, the rest come from the hand
+                        // the called tile comes from the table, the rest come from the hand
                         let expected_zone = if is_called_tile { TileZone::Kawa } else { TileZone::Hand };
 
                         for (vis_entity, vis_slot, _) in existing_slots.iter() {
@@ -786,8 +812,8 @@ pub fn render_open_mentsu_system(
                                 && vis_slot.tile == *tile
                                 && !claimed_entities.contains(&vis_entity)
                             {
-                                // For hand tiles, ensure it belongs to THIS player.
-                                // For kawa tiles, it can belong to anyone.
+                                // for hand tiles, ensure it belongs to this player.
+                                // for kawa tiles, it can belong to anyone.
                                 if expected_zone == TileZone::Kawa || vis_slot.owner == player_entity {
                                     matched_entity = Some(vis_entity);
                                     break;

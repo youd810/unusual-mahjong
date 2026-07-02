@@ -534,7 +534,7 @@ pub fn ron_check(
         if let Some(result) = can_declare_ron(
             &discarded_tile.0, &hand.0, &open_mentsu.0, &nuked_tiles.0, tenpai,
             is_closed, is_oya, kawa, is_riichi, is_double, is_ippatsu,
-            &game.bakaze, &jikaze.0, &*wall,
+            &game.bakaze, &jikaze.0, &wall,
             is_chankan, game.calls_made, has_temp_furiten
         ) {
             commands.entity(player).insert(RonOption {

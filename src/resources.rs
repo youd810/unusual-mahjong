@@ -53,10 +53,13 @@ impl Wall {
             MatchPhase::Sanma | MatchPhase::Nima => 8,
         };
 
+        // 4+10=14 for Yonma, 8+10=18 for Sanma
+        let dead_wall_size = rinshan_max + 10;
+
         Self {
             tiles,
             head: 0,
-            tail: 136 - 14,
+            tail: 136 - dead_wall_size,
             dora_count: 1,
             rinshan_draws: 0,
             rinshan_max,
@@ -75,10 +78,10 @@ impl Wall {
     pub fn rinshan_draw(&mut self) -> Option<Tile> {
         if self.rinshan_draws >= self.rinshan_max { return None; }
 
-        // rinshan tiles sit at the very start of the dead wall section
-        let idx = self.tiles.len() - 14 + self.rinshan_draws;
-        let tile = self.tiles[idx];
+        let dead_wall_size = self.rinshan_max + 10;
+        let idx = self.tiles.len() - dead_wall_size + self.rinshan_draws;
 
+        let tile = self.tiles[idx];
         self.rinshan_draws += 1;
         self.tail -= 1; // supplement the dead wall by pushing the boundary backwards
         Some(tile)
@@ -86,7 +89,7 @@ impl Wall {
 
     pub fn get_dora_indicators(&self) -> Vec<Tile> {
         let mut dora = Vec::new();
-        let base_idx = self.tiles.len() - 14 + self.rinshan_max;
+        let base_idx = self.tiles.len() - 10; // strictly pinned
         for i in 0..self.dora_count {
             dora.push(self.tiles[base_idx + (i * 2)]);
         }
@@ -95,7 +98,7 @@ impl Wall {
 
     pub fn get_ura_indicators(&self) -> Vec<Tile> {
         let mut ura = Vec::new();
-        let base_idx = self.tiles.len() - 14 + self.rinshan_max;
+        let base_idx = self.tiles.len() - 10; // strictly pinned
         for i in 0..self.dora_count {
             ura.push(self.tiles[base_idx + (i * 2) + 1]);
         }
